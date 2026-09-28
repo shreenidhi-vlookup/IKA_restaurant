@@ -21,12 +21,17 @@ exposes a REST API; frontend consumes it per `frontend_spec.md`.
   plausibly addresses the discrepancy with explicit operator-review evidence
 - Serve the table data to the frontend
 - Generate CSV export
+- Ingest the two sales-report sources (the long slip image and the Excel Daily
+  Exception Report), cross-verify them, and store one row per branch + working
+  day (Division 6 ground truth)
+- Reconcile aggregate report figures against the per-pair void tally
+  (reported vs matched vs unresolved, per department)
 
 ## 3. Proposed directory structure
 
     til-system-backend/
-    ├── CONTEXT.md
-    ├── mvp_spec.md
+    ├── context.md
+    ├── MVP_spec.md
     ├── architecture.md
     ├── frontend_spec.md
     ├── rules.md
@@ -37,12 +42,18 @@ exposes a REST API; frontend consumes it per `frontend_spec.md`.
     │   ├── api/
     │   │   ├── upload.py          # POST endpoint: receive image(s)
     │   │   ├── entries.py         # GET/PATCH endpoints: table rows
-    │   │   └── export.py          # GET endpoint: CSV export
+    │   │   ├── export.py          # GET endpoint: CSV export
+    │   │   ├── void_reconciliation.py   # per-pair void tally (5c)
+    │   │   ├── sales_report_reconciliation.py  # aggregate report vs tally + Process dashboard
+    │   │   └── records.py         # ticket/docket/sales-report reads + CSVs
     │   ├── extraction/
-    │   │   └── ocr.py             # text extraction from image (preprocess + OSD deskew + Tesseract)
+    │   │   ├── ocr.py             # text extraction from image (preprocess + OSD deskew + Tesseract)
+    │   │   └── vision.py          # vision-first Gemini extraction (optional, stdlib-only)
     │   ├── models/
     │   │   ├── entry.py           # data model for a bill/discrepancy row
-    │   │   └── segmentation.py    # block segmentation + auditable value correction
+    │   │   ├── segmentation.py    # block segmentation + auditable value correction
+    │   │   └── sales_report.py    # long-slip parsing, shared xlsx reader, canonical dates
+    │   ├── daily_exception.py # Excel Daily Exception Report row-level parsing
     │   ├── storage/
     │   │   └── db.py              # persistence layer (SQLite for MVP)
     │   └── core/
@@ -107,6 +118,71 @@ exposes a REST API; frontend consumes it per `frontend_spec.md`.
       the active UI. The two dedicated datasets are the only parsed record
       tables shown to operators.
 
+      Sales reports (Division 6) use `/api/upload/sales-reports` with two
+      independent sources, either or both, scoped to one branch + working day:
+
+      - **Source 1, the long slip** (multipart `file`): a photo of the till's
+        printed Work Period Report. Vision-first via `app/extraction/vision.py`
+        with Tesseract OCR + `parse_sales_report_text` as the fallback
+        (`extraction_method` recorded, never hidden). The default Gemini model
+        is `gemini-3.8-flash`; `gemini-2.5-flash` returns HTTP 404. `-` in a
+        total is zero, not missing.
+      - **Source 2, the Excel Daily Exception Report** (multipart `excel_file`):
+        a row-level `.xlsx` log parsed by
+        `app/models/daily_exception.py` (raw zipped-XML sheet reader, no
+        dependency). `Daily Void Log` is preferred; `Daily Exception Summary` is
+        a void-amount sanity check only. `Adjustment Type` starting with `Void`
+        is a void, a **blank** one is `unfilled` and is never a void. Bill
+        numbers have whitespace removed, rows are counted and never deduplicated
+        by bill, and a row's day comes from its bill number's `YYMMDD` prefix.
+        Rows outside the selected branch/day are skipped and the skipped count
+        is reported.
+
+      `compare_slip_with_excel` cross-verifies the **void amount** for the
+      branch + day; the void **count** comparison is returned but explicitly
+      unscored, because it is not yet confirmed whether the slip counts voided
+      items or voided bills. A disagreement returns a structured 409 and stores
+      NOTHING until the operator re-submits with `confirm=slip|excel`; the chosen
+      source lands in `confirmed_source` and `cross_verified` stays false.
+
+      The working day is the operator's selection, required, and is never taken
+      from the slip's printed date. For tickets the day is the Ticket ID's
+      `YYMMDD` prefix (the printed date is a fallback), because a till can print
+      a date that differs from the day the report is filed under. All layers
+      share one `canonical_date_key` in `app/models/sales_report.py` so a day
+      written two ways still joins.
+
+      Reports persist ONE row per branch + day in `sales_reports`
+      (`upsert_sales_report` replaces), with the parsed Excel rows in the
+      `daily_exception_rows` child table, also replaced wholesale. Uploaded
+      source files live under `data/uploads/sales_reports/`.
+
+      `GET /api/sales-reports/reconcile` builds the aggregate layer on the
+      per-pair void tally: `build_void_reconciliation()` rows are grouped by
+      restaurant / date / department (the pair builder exposes `department`
+      on each ticket payload) and matched against the report's department
+      totals, producing reported / matched / unresolved plus an anomaly flag
+      when matched exceeds reported. Discounts/promotions are reported but
+      surfaced as untracked coverage gaps.
+
+      `POST /api/sales-reports/process` is the Process button's only data
+      source. `build_process_dashboard` recomputes every dashboard figure per
+      run for one branch + day: the report scope, the Bill-vs-Excel check, the
+      ticket void-item count, dockets filed that day, matched / needs-review /
+      unresolved voids, the unmatched ticket voids and unmatched dockets as
+      LISTS, per-department and total figures, an anomaly flag when matched
+      exceeds reported, discounts/promotions marked not yet reconciled, and a
+      `missing` list naming absent inputs. Dockets carry no restaurant column,
+      so docket figures are date-scoped only and the payload says so. Because a
+      docket is paired on its trailing order number, a matched docket may carry
+      a printed date other than the working day, so dockets filed on the day and
+      dockets used in matches are reported as separate figures.
+
+      `GET /api/restaurants` returns Ilford, Southall and Norbury — always all
+      three, including branches with no tickets yet — each with the till
+      `restaurant_names` behind it, so the frontend never hardcodes branches or
+      maps restaurant names itself.
+
 ## 5. Division-to-code mapping
 | Division | Code location |
 |---|---|
@@ -118,6 +194,11 @@ exposes a REST API; frontend consumes it per `frontend_spec.md`.
 | Docket input | `app/models/docket.py`, `app/api/upload.py`, `app/storage/db.py` |
 | Void reconciliation | `app/api/void_reconciliation.py`, `app/storage/db.py` |
 | Parsed ticket/docket reads and CSVs | `app/api/records.py`, `app/storage/db.py` |
+| Long-slip parsing, shared xlsx reader, canonical dates | `app/models/sales_report.py` |
+| Excel Daily Exception Report parsing | `app/models/daily_exception.py` |
+| Sales report upload + cross-verification | `app/api/upload.py`, `app/extraction/vision.py`, `app/storage/db.py` |
+| Process dashboard (backend owns every figure) | `app/api/sales_report_reconciliation.py` |
+| Aggregate sales-report reconciliation | `app/api/sales_report_reconciliation.py`, `app/api/void_reconciliation.py` |
 
 ## 6. Open decisions (resolve and move into decisions.md)
 - How ticket number / restaurant are identified from extracted text

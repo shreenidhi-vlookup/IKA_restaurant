@@ -5,6 +5,7 @@ import json
 from contextlib import contextmanager
 from datetime import datetime
 from app.models.entry import EntryInDBBase
+from app.models.sales_report import canonical_date_key
 
 DATABASE_PATH = "./data/til_system.db"
 
@@ -60,6 +61,7 @@ def init_db():
                 items TEXT NOT NULL,
                 screenshot_filenames TEXT NOT NULL,
                 raw_texts TEXT NOT NULL,
+                extraction_method TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -80,6 +82,7 @@ def init_db():
                 image_filename TEXT NOT NULL,
                 review_required INTEGER NOT NULL DEFAULT 0,
                 review_reason TEXT,
+                extraction_method TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -94,6 +97,55 @@ def init_db():
                 qty TEXT,
                 total TEXT,
                 is_void INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sales_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                restaurant TEXT NOT NULL,
+                report_date TEXT,
+                departments TEXT NOT NULL,
+                source TEXT NOT NULL,
+                cross_verified INTEGER NOT NULL DEFAULT 0,
+                confirmed_source TEXT,
+                image_filename TEXT,
+                extracted_text TEXT,
+                extraction_method TEXT,
+                extra_fields TEXT,
+                excel_filename TEXT,
+                excel_summary TEXT,
+                excel_skipped_rows INTEGER NOT NULL DEFAULT 0,
+                excel_void_rows INTEGER NOT NULL DEFAULT 0,
+                excel_unfilled_rows INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Source 2: the Excel Daily Exception Report is a row-level audit log,
+        # so it needs its own rows rather than a department-total blob.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS daily_exception_rows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_id INTEGER NOT NULL REFERENCES sales_reports(id) ON DELETE CASCADE,
+                row_date TEXT,
+                branch TEXT,
+                bill_number TEXT,
+                item TEXT,
+                quantity TEXT,
+                amount REAL,
+                adjustment_type TEXT,
+                adjustment TEXT,
+                food_status TEXT,
+                payment_status TEXT,
+                cashier_name TEXT,
+                approving_manager TEXT,
+                reason TEXT,
+                posted_in_group_chat TEXT,
+                docket_photo_attached TEXT,
+                proof TEXT,
+                audit_status TEXT
             )
         """)
 
@@ -120,6 +172,30 @@ def init_db():
         except sqlite3.OperationalError:
             # Column already exists, which is fine
             pass
+
+        # Add extraction_method column if it doesn't exist (for existing databases)
+        for table in ("ticket_records", "docket_records"):
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN extraction_method TEXT")
+                conn.commit()
+            except sqlite3.OperationalError:
+                # Column already exists, which is fine
+                pass
+
+        # Source 2 (Excel Daily Exception Report) metadata, additive.
+        for column, ddl in (
+            ("excel_filename", "TEXT"),
+            ("excel_summary", "TEXT"),
+            ("excel_skipped_rows", "INTEGER NOT NULL DEFAULT 0"),
+            ("excel_void_rows", "INTEGER NOT NULL DEFAULT 0"),
+            ("excel_unfilled_rows", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            try:
+                conn.execute(f"ALTER TABLE sales_reports ADD COLUMN {column} {ddl}")
+                conn.commit()
+            except sqlite3.OperationalError:
+                # Column already exists, which is fine
+                pass
 
         conn.commit()
 
@@ -275,6 +351,13 @@ def upsert_ticket_record(ticket: t.Dict[str, t.Any]) -> sqlite3.Row:
             merged["raw_texts"] = list(dict.fromkeys(
                 old_raw_texts + (ticket.get("raw_texts") or [])
             ))
+            # Vision beats OCR fallback: one vision-parsed screenshot upgraded
+            # the whole merged record.
+            merged["extraction_method"] = (
+                "vision"
+                if ticket.get("extraction_method") == "vision" or existing["extraction_method"] == "vision"
+                else ticket.get("extraction_method") or existing["extraction_method"]
+            )
 
             conn.execute("""
                 UPDATE ticket_records SET
@@ -282,7 +365,8 @@ def upsert_ticket_record(ticket: t.Dict[str, t.Any]) -> sqlite3.Row:
                     terminal = ?, table_name = ?, department = ?, user_name = ?,
                     payment_status = ?, credit_card_amount = ?, ticket_total = ?,
                     grand_total = ?, charged = ?, extra_fields = ?, items = ?,
-                    screenshot_filenames = ?, raw_texts = ?, updated_at = CURRENT_TIMESTAMP
+                    screenshot_filenames = ?, raw_texts = ?, extraction_method = ?,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE ticket_id = ?
             """, (
                 merged.get("ticket_id_display") or existing["ticket_id_display"],
@@ -293,6 +377,7 @@ def upsert_ticket_record(ticket: t.Dict[str, t.Any]) -> sqlite3.Row:
                 merged.get("grand_total"), merged.get("charged"),
                 json.dumps(merged["extra_fields"]), json.dumps(merged["items"]),
                 json.dumps(merged["screenshot_filenames"]), json.dumps(merged["raw_texts"]),
+                merged["extraction_method"],
                 ticket["ticket_id"],
             ))
         else:
@@ -301,8 +386,9 @@ def upsert_ticket_record(ticket: t.Dict[str, t.Any]) -> sqlite3.Row:
                     ticket_id, ticket_id_display, restaurant, phone, ticket_date,
                     terminal, table_name, department, user_name, payment_status,
                     credit_card_amount, ticket_total, grand_total, charged,
-                    extra_fields, items, screenshot_filenames, raw_texts
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    extra_fields, items, screenshot_filenames, raw_texts,
+                    extraction_method
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 ticket["ticket_id"], ticket["ticket_id_display"], ticket.get("restaurant"),
                 ticket.get("phone"), ticket.get("ticket_date"), ticket.get("terminal"),
@@ -313,6 +399,7 @@ def upsert_ticket_record(ticket: t.Dict[str, t.Any]) -> sqlite3.Row:
                 json.dumps(ticket.get("items") or []),
                 json.dumps(ticket.get("screenshot_filenames") or []),
                 json.dumps(ticket.get("raw_texts") or []),
+                ticket.get("extraction_method"),
             ))
 
         items_for_child_table = merged["items"] if existing else (ticket.get("items") or [])
@@ -346,8 +433,8 @@ def create_docket_record(docket: t.Dict[str, t.Any]) -> int:
             INSERT INTO docket_records (
                 docket_order_no, docket_date, docket_time, item, discrepancy_type,
                 handwritten_reason, printed_text, raw_text, extra_fields,
-                image_filename, review_required, review_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                image_filename, review_required, review_reason, extraction_method
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             docket.get("docket_order_no"), docket.get("docket_date"),
             docket.get("docket_time"), docket.get("item"),
@@ -355,6 +442,7 @@ def create_docket_record(docket: t.Dict[str, t.Any]) -> int:
             docket.get("printed_text") or "", docket.get("raw_text") or "",
             json.dumps(docket.get("extra_fields") or {}), docket["image_filename"],
             int(bool(docket.get("review_required"))), docket.get("review_reason"),
+            docket.get("extraction_method"),
         ))
         conn.commit()
         return cursor.lastrowid
@@ -391,4 +479,118 @@ def get_docket_records() -> t.List[sqlite3.Row]:
     with get_db_connection() as conn:
         return conn.execute(
             "SELECT * FROM docket_records ORDER BY created_at ASC, id ASC"
+        ).fetchall()
+
+
+def upsert_sales_report(report: t.Dict[str, t.Any]) -> sqlite3.Row:
+    """One report row per branch + date; a re-upload replaces the previous one.
+
+    `departments` is the long slip (Source 1). `excel_rows` is the row-level
+    Daily Exception log (Source 2) and is fully replaced with the report, so a
+    re-upload can never leave stale exception rows behind.
+    """
+    restaurant = str(report.get("restaurant") or "").strip()
+    report_date = report.get("report_date")
+    date_key = canonical_date_key(report_date)
+
+    with get_db_connection() as conn:
+        existing = None
+        if restaurant:
+            for row in conn.execute(
+                "SELECT * FROM sales_reports WHERE restaurant = ?", (restaurant,)
+            ).fetchall():
+                raw = row["report_date"]
+                other = canonical_date_key(raw)
+                if raw == report_date or (date_key and other == date_key) or (not raw and not report_date):
+                    existing = row
+                    break
+
+        values = (
+            report_date,
+            json.dumps(report.get("departments") or []),
+            report.get("source") or "image",
+            int(bool(report.get("cross_verified"))),
+            report.get("confirmed_source"),
+            report.get("image_filename"),
+            report.get("excel_filename"),
+            report.get("extracted_text") or "",
+            report.get("extraction_method"),
+            json.dumps(report.get("extra_fields") or {}),
+            json.dumps(report.get("excel_summary") or {}),
+            int(report.get("excel_skipped_rows") or 0),
+            int(report.get("excel_void_rows") or 0),
+            int(report.get("excel_unfilled_rows") or 0),
+        )
+
+        if existing:
+            conn.execute("""
+                UPDATE sales_reports SET
+                    report_date = ?, departments = ?, source = ?,
+                    cross_verified = ?, confirmed_source = ?, image_filename = ?,
+                    excel_filename = ?, extracted_text = ?, extraction_method = ?,
+                    extra_fields = ?, excel_summary = ?, excel_skipped_rows = ?,
+                    excel_void_rows = ?, excel_unfilled_rows = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, values + (existing["id"],))
+            report_id = existing["id"]
+        else:
+            cursor = conn.execute("""
+                INSERT INTO sales_reports (
+                    restaurant, report_date, departments, source, cross_verified,
+                    confirmed_source, image_filename, excel_filename, extracted_text,
+                    extraction_method, extra_fields, excel_summary, excel_skipped_rows,
+                    excel_void_rows, excel_unfilled_rows
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (restaurant,) + values)
+            report_id = cursor.lastrowid
+
+        # Source 2 rows are replaced wholesale with the report.
+        conn.execute("DELETE FROM daily_exception_rows WHERE report_id = ?", (report_id,))
+        for row in report.get("excel_rows") or []:
+            conn.execute("""
+                INSERT INTO daily_exception_rows (
+                    report_id, row_date, branch, bill_number, item, quantity, amount,
+                    adjustment_type, adjustment, food_status, payment_status,
+                    cashier_name, approving_manager, reason, posted_in_group_chat,
+                    docket_photo_attached, proof, audit_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                report_id, row.get("date"), row.get("branch"), row.get("bill_number"),
+                row.get("item"), row.get("quantity"), row.get("amount"),
+                row.get("adjustment_type"), row.get("adjustment"), row.get("food_status"),
+                row.get("payment_status"), row.get("cashier_name"),
+                row.get("approving_manager"), row.get("reason"),
+                row.get("posted_in_group_chat"), row.get("docket_photo_attached"),
+                row.get("proof"), row.get("audit_status"),
+            ))
+
+        saved = conn.execute(
+            "SELECT * FROM sales_reports WHERE id = ?", (report_id,)
+        ).fetchone()
+        conn.commit()
+        return saved
+
+
+def get_sales_reports() -> t.List[sqlite3.Row]:
+    """Return all stored sales reports, newest first."""
+    with get_db_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM sales_reports ORDER BY updated_at DESC, created_at DESC, id DESC"
+        ).fetchall()
+
+
+def get_sales_report_by_id(report_id: int) -> t.Optional[sqlite3.Row]:
+    with get_db_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM sales_reports WHERE id = ?", (report_id,)
+        ).fetchone()
+
+
+def get_daily_exception_rows(report_id: int) -> t.List[sqlite3.Row]:
+    """The stored Excel Daily Exception log for one report, in file order."""
+    with get_db_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM daily_exception_rows WHERE report_id = ? ORDER BY id ASC",
+            (report_id,),
         ).fetchall()

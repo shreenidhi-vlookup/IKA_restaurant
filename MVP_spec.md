@@ -110,7 +110,95 @@ docket date matches the ticket date; otherwise all candidates remain visible.
 `GET /api/reconcile/voids/export` emits the same rows in the same
 `row_position` order, including ticket item, docket reason, and candidate IDs.
 
-## 10. Changelog
+## 10. Sales report upload — Division 6 reference data
+Two independent sources describe the same day, and reconciling them is the
+point. Either may be uploaded alone, or both together.
+
+**Source 1 — the long slip** (multipart `file`): a photo of the till's printed
+Work Period (Z) report. Per department it gives the Voids / Discounts /
+Promotions / Cancelled totals, each a count and an amount. Read by vision, with
+a Tesseract+regex fallback whose use is always visible in `extraction_method`.
+
+**Source 2 — the Excel Daily Exception Report** (multipart `excel_file`): a
+row-level `.xlsx` log, one row per voided / discounted / promoted item. Prefer
+the `Daily Void Log` sheet; `Daily Exception Summary` is a void-amount sanity
+check only, never a reconciliation input. It has **no department column**.
+
+`POST /api/upload/sales-reports` requires a `restaurant` (branch: Ilford,
+Southall or Norbury) and a `report_date` (the working day); at least one source
+is required. An optional `confirm` field (`slip` or `excel`) resolves a
+cross-verification conflict.
+
+Cross-verification, when both sources are supplied:
+- The **void amount** for the branch + day is the primary check.
+- The void **count** comparison is shown but **not scored**: it is not yet
+  confirmed whether the slip counts voided items or voided bills, and one bill
+  can own several void rows.
+- On disagreement **nothing is stored** and a structured
+  `409 {status, message, mismatches, slip, excel}` is returned until the
+  operator confirms which source wins. The chosen source is stored and recorded
+  in `confirmed_source`; `cross_verified` stays false.
+
+Long-slip parsing rules:
+- A `-` amount means zero/none (not missing data) and is stored as 0.0.
+- A report line that cannot be recognized goes to `extra_fields`, never a
+  guessed field.
+- The operator's branch always wins over any name read off the slip.
+
+Excel Daily Exception parsing rules:
+- `Adjustment Type` **starting with `Void`** is a void. A **blank**
+  `Adjustment Type` is `unfilled` and is **never** counted as a void — it
+  signals an incomplete log.
+- Bill numbers have all whitespace removed, so `260921 - 48` equals
+  `260921-48`. Rows are **counted, never deduplicated by bill**.
+- Discounts and promotions are separate categories from voids.
+- Rows outside the selected branch/day are skipped, and the skipped count is
+  reported to the operator.
+
+Scope: the working day is always the operator's selection, never the date
+printed on the slip. For tickets and Excel rows the day comes from the
+`YYMMDD` prefix of the Ticket ID / bill number, with a printed date only as a
+fallback, because a till can print a date that differs from the day the report
+is filed under.
+
+Reports are stored keyed by branch + working day; a re-upload of the same
+branch/day replaces the previous parse and its Excel rows rather than
+accumulating rows.
+
+## 11. Process dashboard — aggregate sales-report reconciliation
+`POST /api/sales-reports/process` takes `{restaurant, date}` and is the Process
+button's **only** data source. Every figure is recomputed on each run, and the
+frontend renders the payload verbatim with no client-side matching or
+counting. It contains:
+
+- **Voids in the long slip**: the per-department reported count and amount.
+- **Voids in Excel**: void rows, void amount, rows with no adjustment type,
+  skipped rows, and the bill-by-bill found / not-found against the uploaded
+  tickets (scoped to the same branch and day).
+- **Bill vs Excel check**: the primary void-amount comparison with
+  differences, and the unscored count comparison with its reason.
+- **Voids reconciled against the tally**: per department and total,
+  `reported` vs `void items in tickets` vs `matched` vs `unresolved`, with an
+  **anomaly** flag when `matched > reported`.
+- **Unmatched ticket voids** and **unmatched dockets** as explicit **lists**,
+  each with why it did not match. Ambiguous docket matches are **needs
+  review**, never silently resolved.
+- **Discounts / promotions**: reported by the slip and counted in Excel, but
+  the pair tally tracks voids only, so they are marked `tracked: false`
+  coverage gaps — never faked matched counts.
+- **Dockets** carry no restaurant field, so docket figures are scoped by **date
+  only** and the payload says so. A docket is paired on its trailing order
+  number, so a matched docket may carry a printed date other than the working
+  day; dockets filed on the day and dockets used in matches are therefore
+  reported as separate figures.
+- **Named empty states**: a `missing` list names every absent input, and each
+  panel states which file or record type is absent, so a missing input is never
+  rendered as a zero that reads like a real measurement.
+
+`GET /api/sales-reports/reconcile` remains as the stored-report aggregate read
+over the same per-pair void tally.
+
+## 12. Changelog
 > Every change to scope, flow, or fields gets a dated entry here. Keep it in
 > sync with `decisions.md`.
 
@@ -138,3 +226,7 @@ docket date matches the ticket date; otherwise all candidates remain visible.
 | 2026-09-21 | Added parsed ticket/docket read tables and dedicated CSV exports | Uploaded OCR data must be visible as structured ticket and docket records rather than remaining only in upload responses or SQLite |
 | 2026-09-21 | Enforced ticket/bill pipeline separation and exact hyphenated Ticket ID storage | Ticket screenshots were being misclassified as bill images and losing the second Ticket ID segment |
 | 2026-09-22 | Finalized strict ticket/docket fields, dedicated upload boundaries, read-back verification, and separate table rendering | Uploads must produce immediately queryable structured rows without cross-contamination or raw-text display blobs |
+| 2026-09-23 | Added sales report (Work Period) upload as Division 6 ground truth: image and/or CSV, cross-verified before storage, keyed by restaurant + date, `-` means zero | The till's own aggregates let the void tally report reported vs matched vs unresolved instead of theorizing about missing voids | mvp_spec §10 |
+| 2026-09-23 | Added aggregate sales-report reconciliation (reported/matched/unresolved per department, matched>reported anomaly, discounts/promotions as tracked:false gaps) | Reported-ground-truth vs pair-tally-proven gap is the operator's outstanding work list | mvp_spec §11 |
+| 2026-09-28 | Rewrote §10/§11: Source 2 is the Excel **Daily Exception Report** row-level log (not a mirrored CSV of the slip); cross-verification is by branch+day void **amount** with the count comparison explicitly unscored; a blank Adjustment Type is `unfilled`, never a void; rows are counted not deduplicated; the working day comes from the operator / the `YYMMDD` prefix, never a printed date; `POST /api/sales-reports/process` is the single source of every dashboard figure with named empty states | The two sources are independent records of the same events, which is what makes cross-verifying them meaningful; and a day written on paper can differ from the day the report is filed under, so the printed date must not define the scope | §10, §11 |
+

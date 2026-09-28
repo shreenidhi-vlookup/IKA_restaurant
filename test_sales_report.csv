@@ -1,0 +1,4 @@
+Restaurant,Date,Department,Voids Count,Voids Amount,Discounts Count,Discounts Amount,Promotions Count,Promotions Amount,Cancelled Count,Cancelled Amount
+Test Restaurant,2026-09-24,FOOD,5,25.50,3,15.00,2,10.00,1,5.00
+Test Restaurant,2026-09-24,BEVERAGE,2,8.00,1,2.00,0,0.00,0,0.00
+Test Restaurant,2026-09-24,ALCOHOL,0,0.00,0,0.00,1,5.00,0,0.00

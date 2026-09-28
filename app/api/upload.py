@@ -3,12 +3,30 @@ import uuid
 import json
 import logging
 import re
-from typing import Any, Dict, List
+import typing as t
+from typing import Any, Dict, List, Tuple
 from fastapi import APIRouter, File, UploadFile, HTTPException, Form
 from app.extraction.ocr import extract_text_from_image
+from app.extraction.vision import (
+    VisionExtractionError,
+    vision_available,
+    vision_extract_docket,
+    vision_extract_sales_report,
+    vision_extract_ticket,
+)
 from app.models.ticket import parse_ticket_screenshot
 from app.models.docket import ORDER_NO_RE, parse_docket_text
-from app.storage.db import create_docket_record, get_docket_record, get_ticket_record, upsert_ticket_record, init_db
+from app.models.daily_exception import normalize_branch, parse_daily_exception_report
+from app.models.sales_report import canonical_date_key, compare_slip_with_excel, parse_sales_report_text
+from app.storage.db import (
+    create_docket_record,
+    get_docket_record,
+    get_ticket_record,
+    get_sales_report_by_id,
+    upsert_sales_report,
+    upsert_ticket_record,
+    init_db,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -20,15 +38,154 @@ init_db()
 UPLOAD_DIR = "data/uploads"
 TICKET_SCREENSHOT_DIR = os.path.join(UPLOAD_DIR, "ticket_screenshots")
 DOCKET_IMAGE_DIR = os.path.join(UPLOAD_DIR, "dockets")
+SALES_REPORT_DIR = os.path.join(UPLOAD_DIR, "sales_reports")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(TICKET_SCREENSHOT_DIR, exist_ok=True)
 os.makedirs(DOCKET_IMAGE_DIR, exist_ok=True)
+os.makedirs(SALES_REPORT_DIR, exist_ok=True)
 MAX_BULK_UPLOADS = 30
 
 
 def _looks_like_ticket_screenshot(extracted_text: str) -> bool:
     """Detect ticket screenshot using the master prompt's pattern: Ticket #YYMMDD-N"""
     return bool(re.search(r"(?:ticket\s*)?#?\s*\d{6}\s*[-–]\s*\d+", extracted_text, re.IGNORECASE))
+
+
+def _extract_ticket_parsed(file_path: str, ocr_text: str = "") -> Tuple[Dict[str, Any], str, str]:
+    """Parse a ticket screenshot, vision-first with OCR fallback.
+
+    Returns (parsed, raw_ocr_text, extraction_method) where method is
+    "vision" when the image was read visually or "ocr_fallback" otherwise.
+    """
+    method = "ocr_fallback"
+    parsed = None
+
+    if vision_available():
+        try:
+            parsed = vision_extract_ticket(file_path)
+            method = "vision"
+        except VisionExtractionError as error:
+            logger.warning(
+                "Vision ticket extraction failed for %s, falling back to OCR: %s",
+                file_path,
+                error,
+            )
+
+        if parsed is not None and not parsed.get("ticket_number"):
+            logger.warning(
+                "Vision could not read a Ticket ID from %s, falling back to OCR",
+                file_path,
+            )
+            parsed = None
+            method = "ocr_fallback"
+
+    if parsed is None:
+        if not ocr_text:
+            ocr_text = extract_text_from_image(file_path)
+        return parse_ticket_screenshot(ocr_text), ocr_text, "ocr_fallback"
+
+    # Vision path: keep OCR text for audit only; never let it replace the parse.
+    if not ocr_text:
+        try:
+            ocr_text = extract_text_from_image(file_path)
+        except Exception as error:  # noqa: BLE001 - OCR is best-effort on the vision path
+            logger.warning("OCR audit text unavailable for %s: %s", file_path, error)
+            ocr_text = ""
+    return parsed, ocr_text, "vision"
+
+
+def _extract_docket_parsed(file_path: str) -> Tuple[Dict[str, Any], str, str, List[str]]:
+    """Parse a docket image, vision-first with OCR fallback.
+
+    Returns (parsed, raw_ocr_text, extraction_method, vision_review_flags).
+    """
+    method = "ocr_fallback"
+    parsed = None
+    vision_flags: List[str] = []
+
+    if vision_available():
+        try:
+            parsed, vision_flags = vision_extract_docket(file_path)
+            method = "vision"
+        except VisionExtractionError as error:
+            logger.warning(
+                "Vision docket extraction failed for %s, falling back to OCR: %s",
+                file_path,
+                error,
+            )
+
+    if parsed is None:
+        ocr_text = extract_text_from_image(file_path)
+        return parse_docket_text(ocr_text), ocr_text, "ocr_fallback", []
+
+    try:
+        ocr_text = extract_text_from_image(file_path)
+    except Exception as error:  # noqa: BLE001 - OCR is audit-only on the vision path
+        logger.warning("OCR audit text unavailable for %s: %s", file_path, error)
+        ocr_text = ""
+    return parsed, ocr_text, "vision", vision_flags
+
+
+def _extract_sales_report_image(file_path: str) -> Tuple[Dict[str, Any], str, str]:
+    """Parse a till work period report image, vision-first with OCR fallback.
+
+    Returns (parsed, raw_ocr_text, extraction_method).
+    """
+    parsed = None
+    method = "ocr_fallback"
+
+    if vision_available():
+        try:
+            parsed = vision_extract_sales_report(file_path)
+            method = "vision"
+        except VisionExtractionError as error:
+            logger.warning(
+                "Vision sales report extraction failed for %s, falling back to OCR: %s",
+                file_path,
+                error,
+            )
+
+    if parsed is None:
+        ocr_text = extract_text_from_image(file_path)
+        return parse_sales_report_text(ocr_text), ocr_text, "ocr_fallback"
+
+    try:
+        ocr_text = extract_text_from_image(file_path)
+    except Exception as error:  # noqa: BLE001 - OCR is audit-only on the vision path
+        logger.warning("OCR audit text unavailable for %s: %s", file_path, error)
+        ocr_text = ""
+    return parsed, ocr_text, "vision"
+
+
+def _map_sales_report_to_storage(
+    parsed: Dict[str, Any],
+    raw_text: str,
+    source: str,
+    extraction_method: str,
+    cross_verified: bool,
+    confirmed_source: str = None,
+    image_filename: str = None,
+    csv_filename: str = None,
+    image_departments: List[Dict[str, Any]] = None,
+    csv_departments: List[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return {
+        "restaurant": parsed.get("restaurant"),
+        "report_date": parsed.get("report_date"),
+        "departments": parsed.get("departments", []),
+        "source": source,
+        "cross_verified": cross_verified,
+        "confirmed_source": confirmed_source,
+        "image_filename": image_filename,
+        "csv_filename": csv_filename,
+        "extracted_text": raw_text,
+        "extraction_method": extraction_method,
+        "extra_fields": parsed.get("extra_fields", {}),
+        # Each source's own parse is kept so the Process dashboard can show
+        # "Voids in bill" next to "Voids in Excel" rather than only the winner.
+        "image_departments": image_departments,
+        "csv_departments": csv_departments,
+    }
 
 
 def _map_ticket_to_storage(parsed: Dict[str, Any]) -> Dict[str, Any]:
@@ -62,7 +219,13 @@ def _map_ticket_to_storage(parsed: Dict[str, Any]) -> Dict[str, Any]:
     return mapped
 
 
-def _map_docket_to_storage(parsed: Dict[str, Any], extracted_text: str, image_filename: str) -> Dict[str, Any]:
+def _map_docket_to_storage(
+    parsed: Dict[str, Any],
+    extracted_text: str,
+    image_filename: str,
+    extraction_method: str = "ocr_fallback",
+    vision_review_flags: List[str] = None,
+) -> Dict[str, Any]:
     """Map the master prompt's docket structure to the storage format expected by create_docket_record."""
     # Extract date and time
     date = parsed.get("date")
@@ -71,16 +234,28 @@ def _map_docket_to_storage(parsed: Dict[str, Any], extracted_text: str, image_fi
     # Determine review_required and review_reason
     docket_order_no = parsed.get("docket_order_no")
     discrepancy_type = parsed.get("discrepancy_type")
-    unique_order_numbers = list(dict.fromkeys(ORDER_NO_RE.findall(extracted_text)))
-    ambiguous = len(unique_order_numbers) > 1
-    review_required = ambiguous or not unique_order_numbers or not discrepancy_type
-    review_reason = ""
-    if ambiguous:
-        review_reason = "Multiple docket order numbers detected in one image"
-    elif not unique_order_numbers:
-        review_reason = "Could not isolate one docket order number"
-    elif not discrepancy_type:
-        review_reason = "Could not isolate discrepancy marker"
+    vision_review_flags = vision_review_flags or []
+
+    review_parts: List[str] = []
+    if extraction_method == "vision":
+        # The vision parse already reasoned about the image as a whole;
+        # review flows from what the model could or could not commit to.
+        if not docket_order_no:
+            review_parts.append("Could not isolate one docket order number")
+        if not discrepancy_type:
+            review_parts.append("Could not isolate discrepancy marker")
+        if "multiple_order_numbers" in vision_review_flags:
+            review_parts.append("Multiple docket order numbers detected in one image")
+    else:
+        # OCR text is the only evidence on the fallback path.
+        unique_order_numbers = list(dict.fromkeys(ORDER_NO_RE.findall(extracted_text)))
+        ambiguous = len(unique_order_numbers) > 1
+        if ambiguous:
+            review_parts.append("Multiple docket order numbers detected in one image")
+        elif not unique_order_numbers:
+            review_parts.append("Could not isolate one docket order number")
+        elif not discrepancy_type:
+            review_parts.append("Could not isolate discrepancy marker")
 
     # Map fields
     mapped = {
@@ -94,8 +269,9 @@ def _map_docket_to_storage(parsed: Dict[str, Any], extracted_text: str, image_fi
         "raw_text": extracted_text,
         "extra_fields": parsed.get("extra_fields", {}),
         "image_filename": image_filename,
-        "review_required": review_required,
-        "review_reason": review_reason,
+        "review_required": bool(review_parts),
+        "review_reason": "; ".join(review_parts),
+        "extraction_method": extraction_method,
     }
     return mapped
 
@@ -125,12 +301,15 @@ async def _process_uploaded_file(
 
         if _looks_like_ticket_screenshot(extracted_text):
             # Treat as ticket
-            parsed_ticket = parse_ticket_screenshot(extracted_text)
+            parsed_ticket, parsed_text, extraction_method = _extract_ticket_parsed(
+                file_path, ocr_text=extracted_text
+            )
             if not parsed_ticket.get("ticket_number"):
                 raise ValueError("Ticket screenshot detected, but the full Ticket ID could not be parsed")
 
             # Map to storage format
             ticket_for_storage = _map_ticket_to_storage(parsed_ticket)
+            ticket_for_storage["extraction_method"] = extraction_method
 
             # Save the ticket screenshot
             ticket_filename = f"ticket-{uuid.uuid4()}{file_extension or '.png'}"
@@ -244,15 +423,17 @@ async def upload_ticket_screenshots(files: List[UploadFile] = File(...)):
             with open(file_path, "wb") as handle:
                 handle.write(contents)
 
-            extracted_text = extract_text_from_image(file_path)
-            parsed = parse_ticket_screenshot(extracted_text)
+            parsed, parsed_text, extraction_method = _extract_ticket_parsed(
+                file_path, ocr_text=""
+            )
             if not parsed.get("ticket_number"):
                 raise ValueError("Could not extract Ticket ID in #YYMMDD-N format")
 
             # Map to storage format
             ticket_for_storage = _map_ticket_to_storage(parsed)
+            ticket_for_storage["extraction_method"] = extraction_method
             ticket_for_storage["screenshot_filenames"] = [stored_filename]
-            ticket_for_storage["raw_texts"] = [extracted_text]
+            ticket_for_storage["raw_texts"] = [parsed_text]
 
             record = upsert_ticket_record(ticket_for_storage)
             succeeded.append({
@@ -304,10 +485,25 @@ async def upload_docket_images(files: List[UploadFile] = File(...)):
             with open(file_path, "wb") as handle:
                 handle.write(contents)
 
-            extracted_text = extract_text_from_image(file_path)
-            parsed = parse_docket_text(extracted_text)
+            parsed, raw_text, extraction_method, vision_review_flags = _extract_docket_parsed(
+                file_path
+            )
             # Map to storage format
-            docket_for_storage = _map_docket_to_storage(parsed, extracted_text, stored_filename)
+            docket_for_storage = _map_docket_to_storage(
+                parsed,
+                raw_text,
+                stored_filename,
+                extraction_method=extraction_method,
+                vision_review_flags=vision_review_flags,
+            )
+            if extraction_method == "ocr_fallback":
+                # Never hide that a docket was read without vision.
+                docket_for_storage["review_required"] = True
+                fallback_reason = "Vision extraction unavailable or failed; OCR fallback used"
+                existing_reason = docket_for_storage.get("review_reason") or ""
+                docket_for_storage["review_reason"] = "; ".join(
+                    part for part in (fallback_reason, existing_reason) if part
+                )
 
             docket_id = create_docket_record(docket_for_storage)
             stored_docket = get_docket_record(docket_id)
@@ -339,3 +535,186 @@ async def upload_docket_images(files: List[UploadFile] = File(...)):
         "succeeded": succeeded,
         "failed": failed,
     }
+
+
+@router.post("/upload/sales-reports")
+async def upload_sales_reports(
+    file: UploadFile = File(None, description="Photo of the long slip bill / printed Work Period Report (optional)"),
+    excel_file: UploadFile = File(None, description="Excel Daily Exception Report .xlsx (optional)"),
+    restaurant: str = Form(None, description="Operator-selected branch: Ilford / Southall / Norbury"),
+    report_date: str = Form(None, description="Working day as YYYY-MM-DD; scopes the Excel log"),
+    confirm: str = Form(None, description="On a slip/Excel mismatch: 'slip' or 'excel' confirms which source wins"),
+):
+    """Upload the two reference sources for one branch + day.
+
+    Source 1 `file`        the long slip bill (printed Work Period Report):
+                           per-department Voids/Discounts/Promotions/Cancelled.
+    Source 2 `excel_file`  the Excel "Daily Exception Report" row-level log.
+
+    Either may be uploaded alone. When both are supplied they are cross-verified
+    at branch + day level before storage; a mismatch without `confirm` returns a
+    structured 409 and stores NOTHING.
+    """
+    if file is None and excel_file is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide at least one of `file` (long slip image) or `excel_file`",
+        )
+
+    confirm = (confirm or "").strip().lower()
+    if confirm not in ("", "slip", "excel"):
+        raise HTTPException(status_code=400, detail="confirm must be empty, 'slip', or 'excel'")
+
+    # The operator's selected day is the only scope. The slip's own printed date
+    # is never used to define the day, because a till can print a date that
+    # differs from the day the report is filed under.
+    if not report_date:
+        raise HTTPException(
+            status_code=400,
+            detail="A working day is required so the report is stored against the right day",
+        )
+    if not canonical_date_key(report_date):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not read '{report_date}' as a working day",
+        )
+
+    saved_paths: List[str] = []
+
+    def _cleanup():
+        for path in saved_paths:
+            if path and os.path.exists(path):
+                os.remove(path)
+
+    try:
+        image_path = None
+        excel_path = None
+        slip_parsed: t.Optional[Dict[str, Any]] = None
+        excel_parsed: t.Optional[Dict[str, Any]] = None
+        image_raw = ""
+        method_image = None
+
+        if file is not None:
+            if not file.content_type or not file.content_type.startswith("image/"):
+                raise ValueError("The long slip bill `file` must be an image")
+            extension = os.path.splitext(file.filename or "")[1] or ".png"
+            stored_image_name = f"sales-report-{uuid.uuid4()}{extension}"
+            image_path = os.path.join(SALES_REPORT_DIR, stored_image_name)
+            with open(image_path, "wb") as handle:
+                handle.write(await file.read())
+            saved_paths.append(image_path)
+            slip_parsed, image_raw, method_image = _extract_sales_report_image(image_path)
+
+        if excel_file is not None:
+            if not (excel_file.filename or "").lower().endswith((".xlsx", ".xlsm")):
+                raise ValueError("`excel_file` must be the Excel Daily Exception Report (.xlsx)")
+            stored_excel_name = f"daily-exception-{uuid.uuid4()}.xlsx"
+            excel_path = os.path.join(SALES_REPORT_DIR, stored_excel_name)
+            with open(excel_path, "wb") as handle:
+                handle.write(await excel_file.read())
+            saved_paths.append(excel_path)
+            excel_parsed = parse_daily_exception_report(
+                excel_path,
+                branch=restaurant,
+                report_date=report_date,
+            )
+            if excel_parsed.get("error"):
+                raise ValueError(excel_parsed["error"])
+            if not excel_parsed.get("rows"):
+                raise ValueError(
+                    "The Daily Exception Report has no rows for this branch and date. "
+                    f"Rows skipped as out of scope: {excel_parsed.get('skipped_rows', 0)}"
+                )
+
+        # The operator's branch always wins over a name read off the slip.
+        branch = normalize_branch(restaurant) if restaurant else None
+        if branch and slip_parsed is not None:
+            slip_parsed["restaurant"] = branch
+
+        cross_check = compare_slip_with_excel(slip_parsed, excel_parsed)
+        if cross_check["mismatches"] and not confirm:
+            _cleanup()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "status": "mismatch",
+                    "message": "Long slip and Excel report disagree; confirm which source to store before anything is saved",
+                    "mismatches": cross_check["mismatches"],
+                    "slip": cross_check["slip"],
+                    "excel": cross_check["excel"],
+                },
+            )
+
+        if slip_parsed is not None and excel_parsed is not None:
+            if confirm == "excel" or (not confirm and not cross_check["mismatches"]):
+                source = "excel (confirmed)" if confirm == "excel" else "slip+excel"
+            else:
+                source = "slip (confirmed)"
+            if confirm and cross_check["mismatches"]:
+                cross_verified = False
+                confirmed_source = confirm
+            else:
+                cross_verified = not cross_check["mismatches"]
+                confirmed_source = None
+        else:
+            source = "slip" if slip_parsed is not None else "excel"
+            cross_verified = False
+            confirmed_source = None
+
+        final_branch = (slip_parsed or {}).get("restaurant") or (excel_parsed["rows"][0]["branch"] if excel_parsed and excel_parsed["rows"] else None)
+        if not final_branch:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not determine the branch; the operator must select one",
+            )
+
+        stored = {
+            "restaurant": final_branch,
+            # The day scope comes from the operator, so the slip's own printed
+            # date can never silently move the working day.
+            "report_date": report_date,
+            "departments": (slip_parsed or {}).get("departments", []),
+            "source": source,
+            "cross_verified": cross_verified,
+            "confirmed_source": confirmed_source,
+            "image_filename": os.path.basename(image_path) if image_path else None,
+            "excel_filename": os.path.basename(excel_path) if excel_path else None,
+            "extracted_text": image_raw,
+            "extraction_method": method_image if slip_parsed is not None else "xlsx",
+            "extra_fields": (slip_parsed or {}).get("extra_fields", {}),
+            "excel_rows": (excel_parsed or {}).get("rows", []),
+            "excel_summary": (excel_parsed or {}).get("summary", {}),
+            "excel_skipped_rows": (excel_parsed or {}).get("skipped_rows", 0),
+            "excel_void_rows": (excel_parsed or {}).get("void_rows", 0),
+            "excel_unfilled_rows": (excel_parsed or {}).get("unfilled_rows", 0),
+        }
+        record = upsert_sales_report(stored)
+        if get_sales_report_by_id(record["id"]) is None:
+            raise RuntimeError("Sales report was saved but could not be retrieved")
+
+        return {
+            "id": record["id"],
+            "restaurant": record["restaurant"],
+            "report_date": record["report_date"],
+            "departments": json.loads(record["departments"]),
+            "source": record["source"],
+            "cross_verified": bool(record["cross_verified"]),
+            "confirmed_source": record["confirmed_source"],
+            "extraction_method": record["extraction_method"],
+            "image_filename": record["image_filename"],
+            "excel_filename": record["excel_filename"],
+            "excel": {
+                "void_rows": record["excel_void_rows"],
+                "unfilled_rows": record["excel_unfilled_rows"],
+                "skipped_rows": record["excel_skipped_rows"],
+                "discount_rows": (excel_parsed or {}).get("discount_rows", 0),
+                "promotion_rows": (excel_parsed or {}).get("promotion_rows", 0),
+            } if excel_parsed is not None else None,
+            "cross_check": cross_check,
+        }
+    except HTTPException:
+        raise
+    except Exception as error:
+        _cleanup()
+        logger.exception("Sales report upload failed: %s", error)
+        raise HTTPException(status_code=400, detail=str(error)) from error

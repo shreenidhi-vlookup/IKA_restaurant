@@ -1,8 +1,12 @@
 import { useState, useEffect } from 'react';
 import './App.css';
-import { uploadTicketScreenshotBatch, uploadDocketImageBatch } from './api/upload';
-import { exportDockets, exportTickets, getDockets, getTickets } from './api/records';
-import { updateEntry } from './api/entries';
+import { uploadTicketScreenshotBatch, uploadDocketImageBatch, uploadSalesReport } from './api/upload';
+import { exportDockets, exportTickets, getDockets, getRestaurants, getTickets, processSalesReport } from './api/records';
+import { getEntries, updateEntry } from './api/entries';
+
+const today = () => new Date().toISOString().slice(0, 10);
+const money = (value) => (value === null || value === undefined ? '—' : Number(value).toFixed(2));
+const count = (value) => (value === null || value === undefined ? '—' : value);
 
 // Fallback options shown only while the table is empty; real options are
 // derived from the restaurant values the backend actually returns.
@@ -22,11 +26,22 @@ function App() {
   const activeView = 'tickets';
   const [tickets, setTickets] = useState([]);
   const [dockets, setDockets] = useState([]);
+  const [restaurants, setRestaurants] = useState([]);
   const [selectedRestaurant, setSelectedRestaurant] = useState('');
+  const [selectedDate, setSelectedDate] = useState(today());
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [comparisonCopyStatus, setComparisonCopyStatus] = useState('');
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [recordsError, setRecordsError] = useState(null);
+  // Sales report (long slip + Excel) upload state
+  const [salesReportLoading, setSalesReportLoading] = useState(false);
+  const [salesReportError, setSalesReportError] = useState(null);
+  const [salesReportSaved, setSalesReportSaved] = useState(null);
+  const [salesReportConflict, setSalesReportConflict] = useState(null);
+  // Process dashboard state
+  const [processLoading, setProcessLoading] = useState(false);
+  const [processError, setProcessError] = useState(null);
+  const [dashboard, setDashboard] = useState(null);
   // Description prompt state
   const [descriptionPromptOpen, setDescriptionPromptOpen] = useState(false);
   const [editingEntryId, setEditingEntryId] = useState(null);
@@ -36,13 +51,12 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    setRecordsLoading(true);
-    setRecordsError(null);
-    Promise.all([getTickets(), getDockets()])
-      .then(([ticketData, docketData]) => {
+    Promise.all([getTickets(), getDockets(), getRestaurants()])
+      .then(([ticketData, docketData, branchData]) => {
         if (cancelled) return;
         setTickets(ticketData);
         setDockets(docketData);
+        setRestaurants(branchData);
       })
       .catch((err) => {
         if (!cancelled) setRecordsError(err.message);
@@ -52,6 +66,71 @@ function App() {
       });
     return () => { cancelled = true; };
   }, []);
+
+  // Changing the branch or day invalidates the last saved report and the last
+  // Process result, so a stale dashboard is never shown against a new scope.
+  const handleScopeChange = (setter) => (value) => {
+    setter(value);
+    setSalesReportSaved(null);
+    setSalesReportConflict(null);
+    setSalesReportError(null);
+    setDashboard(null);
+    setProcessError(null);
+  };
+
+  const handleSalesReportUpload = async (confirm) => {
+    if (!selectedRestaurant) {
+      setSalesReportError('Select a branch before uploading the sales report.');
+      return;
+    }
+    if (!comparisonLongSlipFile && !comparisonExcelFile) {
+      setSalesReportError('Select a long slip bill image, an Excel report, or both.');
+      return;
+    }
+    setSalesReportLoading(true);
+    setSalesReportError(null);
+    if (!confirm) setSalesReportConflict(null);
+
+    try {
+      const result = await uploadSalesReport(
+        comparisonLongSlipFile,
+        comparisonExcelFile,
+        selectedRestaurant,
+        selectedDate,
+        confirm || '',
+      );
+      if (result.conflict) {
+        setSalesReportConflict(result.conflict);
+        setSalesReportSaved(null);
+        return;
+      }
+      setSalesReportSaved(result);
+      setSalesReportConflict(null);
+      setDashboard(null);
+    } catch (err) {
+      setSalesReportError(err.message);
+    } finally {
+      setSalesReportLoading(false);
+    }
+  };
+
+  const handleProcess = async () => {
+    if (!selectedRestaurant) {
+      setProcessError('Select a branch before running Process.');
+      return;
+    }
+    setProcessLoading(true);
+    setProcessError(null);
+    try {
+      const payload = await processSalesReport(selectedRestaurant, selectedDate);
+      setDashboard(payload);
+    } catch (err) {
+      setProcessError(err.message);
+      setDashboard(null);
+    } finally {
+      setProcessLoading(false);
+    }
+  };
 
   // Helper function to get entry ID for a record (ticket or docket)
   const getEntryIdForRecord = async (record) => {
@@ -165,13 +244,15 @@ function App() {
   };
 
   const recordRows = activeView === 'tickets' ? tickets : dockets;
-  const restaurantOptions = [...new Set(tickets.map((ticket) => ticket.restaurant).filter(Boolean))].sort();
-  const filteredTickets = selectedRestaurant
-    ? tickets.filter((ticket) => ticket.restaurant === selectedRestaurant)
-    : [];
-  const filteredDockets = selectedRestaurant
-    ? dockets.filter((docket) => docket.restaurant === selectedRestaurant)
-    : [];
+  const branchOptions = restaurants.map((entry) => entry.branch);
+  // The backend maps till restaurant names onto the selected branch; the
+  // ticket/docket tables are filtered by that same name list.
+  const branchRestaurantNames = restaurants
+    .filter((entry) => entry.branch === selectedRestaurant)
+    .flatMap((entry) => entry.restaurant_names);
+  const inSelectedBranch = (record) => branchRestaurantNames.includes(record.restaurant);
+  const filteredTickets = selectedRestaurant ? tickets.filter(inSelectedBranch) : [];
+  const filteredDockets = selectedRestaurant ? dockets.filter(inSelectedBranch) : [];
 
   const requireRestaurant = () => {
     if (!selectedRestaurant) {
@@ -238,6 +319,325 @@ function App() {
       alert(`Failed to copy comparison data: ${err.message}`);
     }
   };
+
+  const renderDashboard = (data) => (
+    <div className="dashboard">
+      <div className="dashboard-header">
+        <div>
+          <p className="eyebrow">Reconciliation dashboard</p>
+          <h3>{data.restaurant} · {data.report_date || 'no date'}</h3>
+          <p className="comparison-copy">Run at {data.generated_at}</p>
+        </div>
+        {data.report && (
+          <div className="dashboard-sources">
+            <span className={`source-chip ${data.bill.uploaded ? 'on' : 'off'}`}>Bill (slip image): {data.bill.uploaded ? data.bill.extraction_method : 'not uploaded'}</span>
+            <span className={`source-chip ${data.excel.uploaded ? 'on' : 'off'}`}>Excel report: {data.excel.uploaded ? `${data.excel.void_rows} void rows` : 'not uploaded'}</span>
+            <span className={`source-chip ${data.cross_verified ? 'on' : 'off'}`}>
+              {data.report.cross_verified ? 'Slip and Excel cross-verified' : 'Not cross-verified'}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {data.missing.length > 0 && (
+        <div className="dashboard-missing" role="status">
+          <strong>Not ready to reconcile.</strong>
+          <p>Still missing for {data.restaurant} on {data.report_date || 'the selected day'}:</p>
+          <ul>{data.missing.map((item) => <li key={item}>{item}</li>)}</ul>
+        </div>
+      )}
+
+      <div className="dashboard-stat-grid">
+        <div className="dashboard-stat">
+          <span className="dashboard-stat-label">Void items in tickets</span>
+          <strong>{count(data.counts.void_items_in_tickets)}</strong>
+          <small>source: Tickets</small>
+        </div>
+        <div className="dashboard-stat">
+          <span className="dashboard-stat-label">Dockets filed on this day</span>
+          <strong>{count(data.counts.dockets)}</strong>
+          <small>source: Dockets · date-only, they carry no restaurant</small>
+        </div>
+        <div className="dashboard-stat">
+          <span className="dashboard-stat-label">Total matched voids</span>
+          <strong>{count(data.counts.matched)}</strong>
+          <small>source: Tickets ↔ Dockets</small>
+        </div>
+        <div className="dashboard-stat">
+          <span className="dashboard-stat-label">Dockets used in matches</span>
+          <strong>{count(data.counts.dockets_used_in_matches)}</strong>
+          <small>
+            {data.counts.matched_dockets_filed_on_another_day
+              ? `${data.counts.matched_dockets_filed_on_another_day} carry a different printed date from the working day`
+              : 'all carry this working day’s date'}
+          </small>
+        </div>
+        <div className="dashboard-stat">
+          <span className="dashboard-stat-label">Unresolved voids</span>
+          <strong>{count(data.totals.unresolved)}</strong>
+          <small>slip reported − matched</small>
+        </div>
+        <div className="dashboard-stat">
+          <span className="dashboard-stat-label">Needs review</span>
+          <strong>{count(data.counts.needs_review)}</strong>
+          <small>ambiguous docket matches</small>
+        </div>
+        <div className={`dashboard-stat ${data.totals.anomaly ? 'dashboard-stat-anomaly' : ''}`}>
+          <span className="dashboard-stat-label">Anomaly</span>
+          <strong>{data.totals.anomaly ? 'Matched exceeds reported' : 'None'}</strong>
+          <small>{data.totals.anomaly ? 'more pairs found than the slip reports' : 'matched never exceeds reported'}</small>
+        </div>
+      </div>
+
+      <article className="dashboard-panel">
+        <h3>Voids in the long slip (Bill)</h3>
+        {data.bill.uploaded ? (
+          <table className="dashboard-table">
+            <thead><tr>
+              <th>Department</th><th>Voids count</th><th>Voids amount</th>
+              <th>Discounts</th><th>Promotions</th><th>Cancelled</th>
+            </tr></thead>
+            <tbody>
+              {data.departments.map((department) => (
+                <tr key={department.name} className={department.anomaly ? 'dashboard-row-anomaly' : ''}>
+                  <td>{department.name}</td>
+                  <td>{count(department.bill.voids_count)}</td>
+                  <td>{money(department.bill.voids_amount)}</td>
+                  <td>{count(department.bill.discounts_count)} / {money(department.bill.discounts_amount)}</td>
+                  <td>{count(department.bill.promotions_count)} / {money(department.bill.promotions_amount)}</td>
+                  <td>{count(department.bill.cancelled_count)} / {money(department.bill.cancelled_amount)}</td>
+                </tr>
+              ))}
+              <tr className="dashboard-total-row">
+                <td>Total</td>
+                <td>{count(data.totals.bill.voids_count)}</td>
+                <td>{money(data.totals.bill.voids_amount)}</td>
+                <td>{count(data.totals.bill.discounts_count)} / {money(data.totals.bill.discounts_amount)}</td>
+                <td>{count(data.totals.bill.promotions_count)} / {money(data.totals.bill.promotions_amount)}</td>
+                <td>{count(data.totals.bill.cancelled_count)} / {money(data.totals.bill.cancelled_amount)}</td>
+              </tr>
+            </tbody>
+          </table>
+        ) : (
+          <p className="dashboard-empty">Empty state: the long slip bill image has not been uploaded for {data.restaurant}.</p>
+        )}
+      </article>
+
+      <article className="dashboard-panel">
+        <h3>Voids in Excel</h3>
+        {data.excel.uploaded ? (
+          <>
+            <div className="dashboard-stat-grid">
+              <div className="dashboard-stat">
+                <span className="dashboard-stat-label">Excel void rows</span>
+                <strong>{count(data.excel.void_rows)}</strong>
+                <small>rows whose adjustment type starts with Void</small>
+              </div>
+              <div className="dashboard-stat">
+                <span className="dashboard-stat-label">Excel void amount</span>
+                <strong>{money(data.excel.voids_amount)}</strong>
+                <small>sum of void-row amounts</small>
+              </div>
+              <div className="dashboard-stat">
+                <span className="dashboard-stat-label">Rows with no adjustment type</span>
+                <strong>{count(data.excel.unfilled_rows)}</strong>
+                <small>blank — never counted as voids, so the log is incomplete</small>
+              </div>
+              <div className="dashboard-stat">
+                <span className="dashboard-stat-label">Rows skipped as out of scope</span>
+                <strong>{count(data.excel.skipped_rows)}</strong>
+                <small>other branches or other days in the same file</small>
+              </div>
+            </div>
+            <table className="dashboard-table">
+              <thead><tr><th>Bill number</th><th>Item</th><th>Amount</th><th>Adjustment type</th><th>Found in tickets</th></tr></thead>
+              <tbody>
+                {[...data.excel.void_bills_found, ...data.excel.void_bills_not_found].map((row, index) => (
+                  <tr key={`${row.bill_number}-${index}`} className={row.found_in_tickets ? '' : 'dashboard-row-unmatched'}>
+                    <td><strong>{row.bill_number || '—'}</strong></td>
+                    <td>{row.item || '—'}</td>
+                    <td>{money(row.amount)}</td>
+                    <td>{row.adjustment_type || '—'}</td>
+                    <td>{row.found_in_tickets ? 'Yes' : 'No'}</td>
+                  </tr>
+                ))}
+                {data.excel.void_bills_found.length + data.excel.void_bills_not_found.length === 0 && (
+                  <tr><td colSpan="5" className="empty-table">No void rows for this branch and day.</td></tr>
+                )}
+              </tbody>
+            </table>
+            <p className="dashboard-note">
+              Excel void bills found in the uploaded tickets: {data.counts.excel_void_bills_found} ·
+              not found: {data.counts.excel_void_bills_not_found}
+            </p>
+          </>
+        ) : (
+          <p className="dashboard-empty">Empty state: the Excel Daily Exception Report has not been uploaded for {data.restaurant}.</p>
+        )}
+      </article>
+
+      <article className="dashboard-panel">
+        <h3>Bill vs Excel check</h3>
+        {data.bill_vs_excel.state === 'unavailable' ? (
+          <p className="dashboard-empty">Only one of the two sources is stored, so there is nothing to compare.</p>
+        ) : (
+          <>
+            <div className={`comparison-result ${data.bill_vs_excel.mismatches.length ? 'comparison-mismatch' : 'comparison-match'}`}>
+              <strong>{data.bill_vs_excel.mismatches.length ? 'Mismatch' : 'Match'}</strong>
+              <span>
+                {data.bill_vs_excel.state === 'match'
+                  ? 'The slip and the Excel report agree on the void amount.'
+                  : 'The void amounts disagree, so the operator chose which source to store.'}
+              </span>
+            </div>
+            <table className="dashboard-table">
+              <thead><tr><th>Check</th><th>Bill (slip)</th><th>Excel</th><th>Difference</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td>Void amount (primary check)</td>
+                  <td>{money(data.bill_vs_excel.slip.voids_amount)}</td>
+                  <td>{money(data.bill_vs_excel.excel.voids_amount)}</td>
+                  <td>
+                    {data.bill_vs_excel.mismatches
+                      .filter((mismatch) => mismatch.metric === 'voids amount')
+                      .map((mismatch) => money(mismatch.difference))
+                      .join(', ') || money(0)}
+                  </td>
+                </tr>
+                <tr>
+                  <td>Void count (not scored)</td>
+                  <td>{count(data.bill_vs_excel.count_comparison.slip)}</td>
+                  <td>{count(data.bill_vs_excel.count_comparison.excel)}</td>
+                  <td>{count(data.bill_vs_excel.count_comparison.difference)}</td>
+                </tr>
+              </tbody>
+            </table>
+            <p className="dashboard-note">Scope: {data.bill_vs_excel.scope}. {data.bill_vs_excel.count_comparison.note}.</p>
+          </>
+        )}
+      </article>
+
+      <article className="dashboard-panel">
+        <h3>Reconciliation by department</h3>
+        <table className="dashboard-table">
+          <thead><tr>
+            <th>Department</th><th>Reported (Bill)</th><th>Void items in tickets</th>
+            <th>Matched</th><th>Unresolved</th><th>Status</th>
+          </tr></thead>
+          <tbody>
+            {data.departments.map((department) => (
+              <tr key={department.name} className={department.anomaly ? 'dashboard-row-anomaly' : ''}>
+                <td>{department.name}</td>
+                <td>{count(department.bill.voids_count)}</td>
+                <td>{count(department.void_items_in_tickets)}</td>
+                <td>{count(department.matched)}</td>
+                <td>{count(department.unresolved)}</td>
+                <td>{department.anomaly ? 'Anomaly' : department.unresolved ? 'Outstanding' : 'Reconciled'}</td>
+              </tr>
+            ))}
+            <tr className="dashboard-total-row">
+              <td>Total</td>
+              <td>{count(data.totals.bill.voids_count)}</td>
+              <td>{count(data.totals.void_items_in_tickets)}</td>
+              <td>{count(data.totals.matched)}</td>
+              <td>{count(data.totals.unresolved)}</td>
+              <td>{data.totals.anomaly ? 'Anomaly' : data.totals.unresolved ? 'Outstanding' : 'Reconciled'}</td>
+            </tr>
+          </tbody>
+        </table>
+      </article>
+
+      <div className="dashboard-two-column">
+        <article className="dashboard-panel">
+          <h3>Unmatched ticket voids ({data.counts.unmatched_ticket_voids})</h3>
+          {data.unmatched_ticket_voids.length === 0 ? (
+            <p className="dashboard-empty">Every void item in the uploaded tickets found a docket.</p>
+          ) : (
+            <table className="dashboard-table">
+              <thead><tr><th>Ticket</th><th>Department</th><th>Item</th><th>Total</th><th>Why</th></tr></thead>
+              <tbody>
+                {data.unmatched_ticket_voids.map((row, index) => (
+                  <tr key={`${row.ticket_id}-${index}`}>
+                    <td><strong>{row.ticket_id}</strong></td>
+                    <td>{row.department || '—'}</td>
+                    <td>{row.item || '—'}</td>
+                    <td>{money(row.total)}</td>
+                    <td>{row.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </article>
+
+        <article className="dashboard-panel">
+          <h3>Unmatched dockets ({data.counts.unmatched_dockets})</h3>
+          {data.unmatched_dockets.length === 0 ? (
+            <p className="dashboard-empty">Every uploaded docket was paired with a ticket void.</p>
+          ) : (
+            <table className="dashboard-table">
+              <thead><tr><th>Order no</th><th>Date</th><th>Item</th><th>Type</th><th>Photo</th></tr></thead>
+              <tbody>
+                {data.unmatched_dockets.map((row, index) => (
+                  <tr key={`${row.order_number}-${index}`}>
+                    <td><strong>{row.order_number || '—'}</strong></td>
+                    <td>{row.date || '—'}</td>
+                    <td>{row.item || '—'}</td>
+                    <td>{row.discrepancy_type || '—'}</td>
+                    <td>{row.image_filename || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p className="dashboard-note">{data.coverage.dockets}</p>
+        </article>
+      </div>
+
+      <article className="dashboard-panel">
+        <h3>Discounts and promotions — not yet reconciled</h3>
+        <p className="dashboard-note">{data.coverage.discounts}</p>
+        <table className="dashboard-table">
+          <thead><tr><th>Department (from the Bill)</th><th>Discounts</th><th>Promotions</th><th>Cancelled</th></tr></thead>
+          <tbody>
+            {data.departments.map((department) => (
+              <tr key={department.name}>
+                <td>{department.name}</td>
+                <td>{count(department.discounts.reported_count)} / {money(department.discounts.reported_amount)}</td>
+                <td>{count(department.promotions.reported_count)} / {money(department.promotions.reported_amount)}</td>
+                <td>{count(department.cancelled.count)} / {money(department.cancelled.amount)}</td>
+              </tr>
+            ))}
+            <tr className="dashboard-total-row">
+              <td>Total (Bill)</td>
+              <td>{count(data.totals.discounts.reported_count)} / {money(data.totals.discounts.reported_amount)}</td>
+              <td>{count(data.totals.promotions.reported_count)} / {money(data.totals.promotions.reported_amount)}</td>
+              <td>{count(data.totals.cancelled.count)} / {money(data.totals.cancelled.amount)}</td>
+            </tr>
+          </tbody>
+        </table>
+        {data.excel.uploaded ? (
+          <table className="dashboard-table">
+            <thead><tr><th>Excel (branch + day, no department column)</th><th>Rows</th><th>Amount</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Discounts</td>
+                <td>{count(data.excel.discount_rows)}</td>
+                <td>{money(data.excel.discounts_amount)}</td>
+              </tr>
+              <tr>
+                <td>Promotions</td>
+                <td>{count(data.excel.promotion_rows)}</td>
+                <td>{money(data.excel.promotions_amount)}</td>
+              </tr>
+            </tbody>
+          </table>
+        ) : (
+          <p className="dashboard-empty">Empty state: the Excel Daily Exception Report has not been uploaded, so no Excel discount or promotion figures are available.</p>
+        )}
+      </article>
+    </div>
+  );
 
   const renderTicketTable = (rows, label) => (
     <div className="upload-data-table">
@@ -408,45 +808,36 @@ function App() {
         <section className="restaurant-filter-section">
           <div>
             <p className="eyebrow">Step 1</p>
-            <h2>Choose a restaurant</h2>
-            <p className="filter-copy">Select the restaurant for this working day before adding screenshots and docket images.</p>
+            <h2>Choose a branch and day</h2>
+            <p className="filter-copy">Everything below is scoped to this branch and working day, the same scope the tickets and dockets are matched on.</p>
           </div>
-          <label className="restaurant-filter-field">
-            <span>Restaurant</span>
-            <select value={selectedRestaurant} onChange={(event) => setSelectedRestaurant(event.target.value)}>
-              <option value="">Select a restaurant</option>
-              {restaurantOptions.map((restaurant) => <option key={restaurant} value={restaurant}>{restaurant}</option>)}
-            </select>
-          </label>
+          <div className="branch-filter-fields">
+            <label className="restaurant-filter-field">
+              <span>Branch</span>
+              <select value={selectedRestaurant} onChange={(event) => handleScopeChange(setSelectedRestaurant)(event.target.value)}>
+                <option value="">Select a branch</option>
+                {branchOptions.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
+              </select>
+            </label>
+            <label className="restaurant-filter-field">
+              <span>Working day</span>
+              <input type="date" value={selectedDate} onChange={(event) => handleScopeChange(setSelectedDate)(event.target.value)} />
+            </label>
+          </div>
         </section>
 
         <section className="comparison-source-panel" aria-labelledby="comparison-source-title">
           <div className="comparison-source-copy">
-            <p className="eyebrow">Comparison source</p>
-            <h2 id="comparison-source-title">Choose a file to compare</h2>
-            <p>Use an Excel file for structured data or a long bill slip image. File processing and comparison will be connected by the backend team.</p>
+            <p className="eyebrow">Step 2 — comparison sources</p>
+            <h2 id="comparison-source-title">Upload the long slip and the Excel report</h2>
+            <p>
+              The <strong>long slip bill</strong> is the till's printed Work Period Report: per-department void,
+              discount, promotion and cancelled totals. The <strong>Excel report</strong> is the Daily Exception
+              Report: one row per voided, discounted or promoted item. Upload either on its own, or both to
+              cross-verify them against each other.
+            </p>
           </div>
           <div className="comparison-source-actions">
-            <div className="comparison-source-control">
-              <input
-                id="comparison-excel-upload"
-                className="file-picker"
-                type="file"
-                accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                onChange={(event) => {
-                  const [file] = Array.from(event.target.files || []);
-                  if (file) setComparisonExcelFile(file);
-                  event.target.value = '';
-                }}
-              />
-              <label className="source-upload-button" htmlFor="comparison-excel-upload">
-                <span className="source-upload-button-icon">XLS</span>
-                Upload Excel
-              </label>
-              <span className={`source-file-selection ${comparisonExcelFile ? 'has-file' : ''}`} title={comparisonExcelFile?.name || ''}>
-                {comparisonExcelFile ? `Selected: ${comparisonExcelFile.name}` : 'Excel file (.xls, .xlsx)'}
-              </span>
-            </div>
             <div className="comparison-source-control">
               <input
                 id="comparison-long-slip-upload"
@@ -467,7 +858,98 @@ function App() {
                 {comparisonLongSlipFile ? `Selected: ${comparisonLongSlipFile.name}` : 'Long bill slip image'}
               </span>
             </div>
+            <div className="comparison-source-control">
+              <input
+                id="comparison-excel-upload"
+                className="file-picker"
+                type="file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={(event) => {
+                  const [file] = Array.from(event.target.files || []);
+                  if (file) setComparisonExcelFile(file);
+                  event.target.value = '';
+                }}
+              />
+              <label className="source-upload-button" htmlFor="comparison-excel-upload">
+                <span className="source-upload-button-icon">XLS</span>
+                Upload Excel
+              </label>
+              <span className={`source-file-selection ${comparisonExcelFile ? 'has-file' : ''}`} title={comparisonExcelFile?.name || ''}>
+                {comparisonExcelFile ? `Selected: ${comparisonExcelFile.name}` : 'Daily Exception Report (.xlsx)'}
+              </span>
+            </div>
           </div>
+          <div className="comparison-source-footer">
+            <button
+              className="primary-action-button"
+              onClick={() => handleSalesReportUpload('')}
+              disabled={salesReportLoading || !selectedRestaurant || (!comparisonLongSlipFile && !comparisonExcelFile)}
+            >
+              {salesReportLoading ? 'Saving...' : 'Save comparison sources'}
+            </button>
+            <p className="comparison-source-note">
+              {selectedRestaurant
+                ? `Saved against ${selectedRestaurant} · ${selectedDate}`
+                : 'Select a branch to enable saving.'}
+            </p>
+          </div>
+          {salesReportLoading && <p className="upload-progress">Extracting the sales report...</p>}
+          {salesReportError && <p className="upload-error">{salesReportError}</p>}
+          {salesReportSaved && (
+            <div className="sales-report-saved" role="status">
+              <strong>Saved</strong>
+              <span>{salesReportSaved.restaurant} · {salesReportSaved.report_date || 'no date on the slip'} · source {salesReportSaved.source}</span>
+              <span>
+                Extraction {salesReportSaved.extraction_method}
+                {salesReportSaved.cross_verified ? ' · slip and Excel cross-verified' : ''}
+                {salesReportSaved.confirmed_source ? ` · ${salesReportSaved.confirmed_source} confirmed by the operator` : ''}
+              </span>
+              {salesReportSaved.excel && (
+                <span>
+                  Excel: {salesReportSaved.excel.void_rows} void rows · {salesReportSaved.excel.unfilled_rows} rows with no adjustment type
+                  {salesReportSaved.excel.skipped_rows ? ` · ${salesReportSaved.excel.skipped_rows} rows skipped as out of scope` : ''}
+                </span>
+              )}
+              <table className="saved-department-table">
+                <thead><tr>
+                  <th>Department</th><th>Voids</th><th>Discounts</th><th>Promotions</th><th>Cancelled</th>
+                </tr></thead>
+                <tbody>
+                  {salesReportSaved.departments.map((department) => (
+                    <tr key={department.name}>
+                      <td>{department.name}</td>
+                      <td>{count(department.voids_count)} / {money(department.voids_amount)}</td>
+                      <td>{count(department.discounts_count)} / {money(department.discounts_amount)}</td>
+                      <td>{count(department.promotions_count)} / {money(department.promotions_amount)}</td>
+                      <td>{count(department.cancelled_count)} / {money(department.cancelled_amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {salesReportConflict && (
+            <div className="sales-report-conflict" role="alert">
+              <strong>{salesReportConflict.message}</strong>
+              <p>Nothing has been saved. Choose which source to store:</p>
+              <ul>
+                {(salesReportConflict.mismatches || []).map((mismatch) => (
+                  <li key={`${mismatch.metric}-${mismatch.slip}-${mismatch.excel}`}>
+                    {mismatch.metric}: slip {money(mismatch.slip)} vs Excel {money(mismatch.excel)}
+                    {' '}(difference {money(mismatch.difference)})
+                  </li>
+                ))}
+              </ul>
+              <div className="button-group">
+                <button className="primary-action-button" onClick={() => handleSalesReportUpload('slip')} disabled={salesReportLoading}>
+                  Store the long slip
+                </button>
+                <button className="primary-action-button" onClick={() => handleSalesReportUpload('excel')} disabled={salesReportLoading}>
+                  Store the Excel report
+                </button>
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="bulk-upload-grid">
@@ -518,7 +1000,7 @@ function App() {
                 {showTicketData ? 'Hide data' : 'Show data'}
               </button>
             )}
-            {showTicketData && ticketUploadData.filter((ticket) => ticket.restaurant === selectedRestaurant).length > 0 && renderTicketTable(ticketUploadData.filter((ticket) => ticket.restaurant === selectedRestaurant), 'Uploaded ticket data')}
+            {showTicketData && ticketUploadData.filter(inSelectedBranch).length > 0 && renderTicketTable(ticketUploadData.filter(inSelectedBranch), 'Uploaded ticket data')}
           </div>
 
           <div className="upload-section bulk-panel">
@@ -570,9 +1052,27 @@ function App() {
                 {showDocketData ? 'Hide data' : 'Show data'}
               </button>
             )}
-            {showDocketData && docketUploadData.length > 0 && selectedRestaurant && renderDocketTable(docketUploadData, 'Uploaded docket data')}
+            {showDocketData && docketUploadData.filter(inSelectedBranch).length > 0 && renderDocketTable(docketUploadData.filter(inSelectedBranch), 'Uploaded docket data')}
           </div>
         </section>
+        <section className="process-section" aria-labelledby="process-title">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Step 3</p>
+              <h2 id="process-title">Process this branch and day</h2>
+              <p className="filter-copy">
+                Runs the reconciliation for {selectedRestaurant || 'the selected branch'} on {selectedDate} and
+                opens the dashboard. Every figure comes from the backend, recalculated on each run.
+              </p>
+            </div>
+            <button className="primary-action-button" onClick={handleProcess} disabled={processLoading || !selectedRestaurant}>
+              {processLoading ? 'Processing...' : 'Process'}
+            </button>
+          </div>
+          {processError && <p className="upload-error">{processError}</p>}
+          {dashboard && renderDashboard(dashboard)}
+        </section>
+
         <section id="records-section" className="parsed-record-section">
           <div className="section-heading table-heading">
             <div>
