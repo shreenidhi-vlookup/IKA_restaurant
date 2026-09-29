@@ -45,3 +45,9 @@ Ticket OCR output and Gemini docket output are validated against strict Pydantic
 - A shared process-local request pacer uses `EXTRACTION_MAX_RPM` (default 4) across Gemini docket calls and retries. Local ticket OCR does not consume provider RPM. `EXTRACTION_CONCURRENCY` (default 2, supported 1-8) controls worker count. Set these according to the Gemini project quota.
 - The request pacer is process-local; deployments with multiple API worker processes must keep extraction on one process or add a shared limiter before scaling across processes.
 - Gemini vision is active only for docket extraction (`GEMINI_MODEL`, default `gemini-3.5-flash-lite`, key in `GEMINI_API_KEY`). NVIDIA is not used by the upload workflow. Ticket screenshot OCR uses Tesseract and is audited per file; Gemini output is validated locally against the strict Pydantic docket schema.
+
+## Local Ethernet preview
+The Vite development server binds to 0.0.0.0 on port 5173 by default, with a strict fixed port. Open http://<host-ethernet-ip>:5173/ from a device on the same subnet. Vite proxies /api requests to the local FastAPI service on 127.0.0.1:8000, so only port 5173 needs an inbound firewall rule.
+
+
+Ticket OCR tries multiple Tesseract page-segmentation layouts and combines missing fields from alternate passes. When a WhatsApp screenshot crops the item-table heading, the parser detects rows from their POS price/quantity/total column positions, preserves wrapped item names, and re-reads tinted/struck rows for their item text. Metadata not present in the screenshot remains blank rather than being guessed from unrelated text.

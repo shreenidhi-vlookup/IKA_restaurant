@@ -32,8 +32,8 @@ def _tesseract_module():
     return pytesseract
 
 
-def _ocr_words(image: Image.Image, pytesseract) -> list[dict[str, Any]]:
-    data = pytesseract.image_to_data(image, lang="eng", config="--oem 1 --psm 6", output_type=pytesseract.Output.DICT)
+def _ocr_words(image: Image.Image, pytesseract, page_segmentation: int = 6) -> list[dict[str, Any]]:
+    data = pytesseract.image_to_data(image, lang="eng", config=f"--oem 1 --psm {page_segmentation}", output_type=pytesseract.Output.DICT)
     words = []
     for index, text in enumerate(data["text"]):
         text = str(text).strip()
@@ -161,6 +161,46 @@ def _clean_category(value: str | None) -> str | None:
     return cleaned
 
 
+def _fallback_ticket_fields(text: str) -> dict[str, str | None]:
+    """Recover common ticket fields from OCR text when spatial label alignment fails."""
+    result: dict[str, str | None] = {}
+    date_match = re.search(r"\b(\d{1,2}[/-]\d{1,2}[/-](?:19|20)?\d{2})\b", text)
+    if date_match:
+        result["date"] = date_match.group(1)
+    terminal_match = re.search(r"\b(?:Till?|Terminal)\s*[-:#]?\s*\d+\b", text, re.I)
+    if terminal_match:
+        terminal = re.sub(r"\s+", "", terminal_match.group(0))
+        result["terminal"] = re.sub(r"^Terminal", "Till", terminal, flags=re.I)
+    table_match = re.search(r"\bTable\s*[:#-]?\s*(\d{1,4}[A-Za-z]?)\b", text, re.I)
+    if table_match:
+        result["table"] = table_match.group(1)
+    department_context = re.search(r"\bDepartment\b([\s\S]{0,60})", text, re.I)
+    department_match = re.search(r"\b(TAKE\s*AWAY|RESTAURANT|DELIVERY|COLLECTION|BAR)\b", department_context.group(1), re.I) if department_context else None
+    if department_match:
+        result["department"] = re.sub(r"\s+", " ", department_match.group(1)).upper()
+    payment_context = re.search(r"Payment\s*Status([\s\S]{0,45})", text, re.I)
+    payment_match = re.search(r"\b(PAID|UNPAID|PENDING|REFUNDED)\b", payment_context.group(1), re.I) if payment_context else None
+    if payment_match:
+        result["payment_status"] = payment_match.group(1).title()
+    user_match = re.search(
+        r"\bUser\b\s*(?:Payment\s*Status)?\s*[:#-]?\s*([A-Z][A-Z' -]{1,28}?)(?=\s+(?:Paid|Unpaid|Pending|Refunded)\b|\s+Credit\s*Card\b|$)",
+        text, re.I | re.S,
+    )
+    if user_match:
+        user = re.sub(r"\s+", " ", user_match.group(1)).strip(" :-")
+        if user and not re.search(r"\b(?:Date|Terminal|Table|Department|Payment|Status|Items)\b", user, re.I):
+            result["user"] = user
+    credit_match = re.search(r"Credit\s*Card\b[^\d\n]{0,18}([\d,]+[.,]\d{2})", text, re.I)
+    if credit_match:
+        result["credit_card"] = credit_match.group(1).replace(",", ".")
+    return result
+
+
+def _parse_score(parsed: dict[str, Any]) -> int:
+    scalar_fields = ("ticket_id", "branch", "date", "terminal", "table", "department", "user", "payment_status", "credit_card", "ticket_total", "grand_total", "charged")
+    return sum(bool(parsed.get(key)) for key in scalar_fields) + len(parsed.get("items") or []) * 3
+
+
 def _strikethrough_line(gray: Image.Image, boxes: list[tuple[int, int, int, int]]) -> bool:
     pixels = gray.load()
     for left, top, right, bottom in boxes:
@@ -189,10 +229,29 @@ def _repair_horizontal_strokes(image: Image.Image, words: list[dict[str, Any]]) 
     groups = _line_groups(words)
     lines = [_normalized(_group_text(group)) for group in groups]
     header_index = next((i for i, line in enumerate(lines) if all(label in line for label in ("item", "price", "qty", "total"))), None)
-    if header_index is None:
-        return image
-    start_y = max(word["y"] + word["h"] for word in groups[header_index])
-    footer_index = next((i for i in range(header_index + 1, len(groups)) if "tickettotal" in lines[i]), None)
+    if header_index is not None:
+        start_y = max(word["y"] + word["h"] for word in groups[header_index])
+        search_from = header_index + 1
+    else:
+        # Ticket detail screenshots sent through messaging apps can omit the
+        # table headings. Infer the body start from the repeated POS column grid.
+        boundaries = _column_boundaries([], image.width)
+        body_index = None
+        for index, group in enumerate(groups):
+            columns: dict[int, list[dict[str, Any]]] = defaultdict(list)
+            for word in group:
+                columns[_column_index(word["x"], boundaries)].append(word)
+            price = _clean_money(" ".join(word["text"] for word in columns[2]))
+            quantity = " ".join(word["text"] for word in columns[3])
+            total = _clean_money(" ".join(word["text"] for word in columns[4]))
+            if price and re.search(r"\d", quantity) and total:
+                body_index = index
+                break
+        if body_index is None:
+            return image
+        start_y = max(0, min(word["y"] for word in groups[body_index]) - 8)
+        search_from = body_index + 1
+    footer_index = next((i for i in range(search_from, len(groups)) if "tickettotal" in lines[i]), None)
     end_y = min((word["y"] for word in groups[footer_index]), default=image.height) if footer_index is not None else image.height
     if end_y <= start_y:
         return image
@@ -290,6 +349,13 @@ def _tesseract_cell(image: Image.Image, bounds: tuple[int, int, int, int], pytes
     return pytesseract.image_to_string(crop, lang="eng", config="--oem 1 --psm 7").strip()
 
 
+def _tesseract_row_name(image: Image.Image, bounds: tuple[int, int, int, int], pytesseract) -> str:
+    """Use a multiline OCR pass for faded names inside tinted/struck item rows."""
+    crop = ImageOps.autocontrast(image.crop(bounds).convert("L"))
+    crop = crop.resize((crop.width * 3, crop.height * 3), Image.Resampling.LANCZOS)
+    return re.sub(r"\s+", " ", pytesseract.image_to_string(crop, lang="eng", config="--oem 1 --psm 6")).strip()
+
+
 def _parse_ticket(image: Image.Image, words: list[dict[str, Any]], gray: Image.Image, pytesseract=None) -> dict[str, Any]:
     groups = _line_groups(words)
     full_text = "\n".join(_group_text(group) for group in groups)
@@ -299,13 +365,31 @@ def _parse_ticket(image: Image.Image, words: list[dict[str, Any]], gray: Image.I
 
     lower_lines = [_normalized(_group_text(group)) for group in groups]
     table_header_index = next((index for index, line in enumerate(lower_lines) if all(label in line for label in ("item", "price", "qty", "total"))), None)
+    if table_header_index is None:
+        # WhatsApp ticket-detail screenshots often crop off the column headings.
+        # The item rows retain consistent POS column positions, so locate the
+        # first row by its price/quantity/total cells and use geometric defaults.
+        fallback_boundaries = _column_boundaries([], image.width)
+        first_item_index = None
+        for index, group in enumerate(groups):
+            columns: dict[int, list[dict[str, Any]]] = defaultdict(list)
+            for word in group:
+                columns[_column_index(word["x"], fallback_boundaries)].append(word)
+            price_text = " ".join(word["text"] for word in columns[2])
+            quantity_text = " ".join(word["text"] for word in columns[3])
+            total_text = " ".join(word["text"] for word in columns[4])
+            if _clean_money(price_text) and re.search(r"\d", quantity_text) and _clean_money(total_text):
+                first_item_index = index
+                break
+        if first_item_index is not None:
+            table_header_index = first_item_index - 1
     items: list[dict[str, Any]] = []
     if table_header_index is not None:
-        header = groups[table_header_index]
+        header = groups[table_header_index] if table_header_index >= 0 else []
         boundaries = _column_boundaries(header, image.width)
         candidates: list[dict[str, Any]] = []
         pending_names: list[str] = []
-        for group in groups[table_header_index + 1:]:
+        for group in groups[max(0, table_header_index + 1):]:
             line = _group_text(group)
             if re.search(r"ticket\s+total", line, re.I):
                 break
@@ -356,7 +440,10 @@ def _parse_ticket(image: Image.Image, words: list[dict[str, Any]], gray: Image.I
                     elif re.search(r"\b\d+\s*pcs\b|\b(large|small)\b", extra, re.I):
                         candidates[-1]["name"] += " " + extra
                     else:
-                        pending_names.append(extra)
+                        # A plain text line immediately below a measured item row
+                        # is usually its wrapped name (e.g. "CHICKEN SEEKH" /
+                        # "KEBAB"), not the next item's prefix.
+                        candidates[-1]["name"] = f"{candidates[-1]['name']} {extra}".strip()
                     candidates[-1]["_name_boxes"].extend((word["x"], word["y"], word["x"] + word["w"], word["y"] + word["h"]) for word in name_words)
                     candidates[-1]["_bottom"] = max(candidates[-1]["_bottom"], max(word["y"] + word["h"] for word in name_words))
             elif name_words:
@@ -364,18 +451,29 @@ def _parse_ticket(image: Image.Image, words: list[dict[str, Any]], gray: Image.I
                 if extra and not extra.startswith(("(", "*")):
                     pending_names.append(extra)
         if pytesseract is not None:
-            table_top = max(word["y"] + word["h"] for word in header)
+            table_top = max((word["y"] + word["h"] for word in header), default=0)
             footer_index = next((i for i in range(table_header_index + 1, len(groups)) if "tickettotal" in lower_lines[i]), None)
             table_bottom = min((word["y"] for word in groups[footer_index]), default=image.height) if footer_index is not None else image.height
             bands = _tinted_bands(image, table_top, table_bottom)
             item_left = round(image.width * 0.035)
             category_left, price_left, quantity_left, total_left = (round(value) for value in boundaries)
             for band_top, band_bottom in bands:
-                if any(candidate["_top"] < band_bottom and candidate["_bottom"] > band_top for candidate in candidates):
+                overlapping = [candidate for candidate in candidates if candidate["_top"] < band_bottom and candidate["_bottom"] > band_top]
+                if overlapping:
+                    name_box = (item_left + 2, band_top, category_left - 3, band_bottom)
+                    recovered_name = _tesseract_row_name(image, name_box, pytesseract)
+                    void_label = bool(re.search(r"\(\s*(?:void|veid)\s*\)", recovered_name, re.I))
+                    recovered_name = re.sub(r"\s*\(\s*(?:void|veid)\s*\)\s*", " ", recovered_name, flags=re.I).strip()
+                    recovered_name = re.sub(r"\s+", " ", recovered_name)
+                    current = overlapping[0]
+                    if recovered_name and len(_normalized(recovered_name)) > len(_normalized(current["name"])):
+                        current["name"] = recovered_name + (" (Void)" if void_label else "")
+                    if void_label:
+                        current["signals"]["void_label_text"] = True
                     continue
                 pad = max(2, round((band_bottom - band_top) * 0.04))
                 row_top, row_bottom = max(table_top, band_top - pad), min(table_bottom, band_bottom + pad)
-                name = _tesseract_cell(image, (item_left, row_top, category_left + 1, row_bottom), pytesseract)
+                name = _tesseract_row_name(image, (item_left, row_top, category_left + 1, row_bottom), pytesseract)
                 category = _tesseract_cell(image, (category_left - 9, row_top, price_left + 2, row_bottom), pytesseract)
                 price_text = _tesseract_cell(image, (price_left - 8, row_top, quantity_left - 25, row_bottom), pytesseract, threshold=False)
                 quantity_text = _tesseract_cell(image, (quantity_left + 5, row_top, total_left + 10, row_bottom), pytesseract, threshold=False)
@@ -385,7 +483,8 @@ def _parse_ticket(image: Image.Image, words: list[dict[str, Any]], gray: Image.I
                     continue
                 name_box = (item_left + 2, band_top, category_left - 3, band_bottom)
                 struck = _strikethrough_line(gray, [name_box])
-                label = bool(re.search(r"\(\s*void\s*\)\s*$", name, re.I))
+                label = bool(re.search(r"\(\s*(?:void|veid|[^\w\s]eid)\s*\)", name, re.I))
+                name = re.sub(r"\s*\(\s*(?:void|veid|[^\w\s]eid)\s*\)\s*", " ", name, flags=re.I).strip()
                 qty = _clean_amount(quantity_text)
                 if price == total:
                     qty = "1"
@@ -454,6 +553,13 @@ def _parse_ticket(image: Image.Image, words: list[dict[str, Any]], gray: Image.I
         "charged": money_after("Charged"),
         "extra_fields": [],
     }
+    fallback_fields = _fallback_ticket_fields(full_text)
+    for field, value in fallback_fields.items():
+        if not parsed.get(field):
+            parsed[field] = value
+    if not parsed.get("date") and ticket_id_match:
+        ticket_day = ticket_id_match.group(1)[:6]
+        parsed["date"] = f"{int(ticket_day[4:6])}/{int(ticket_day[2:4])}/20{ticket_day[:2]}"
     # Keep every recognized OCR line available for audit/review, including fields
     # the current ticket layout parser does not yet map.
     return TicketExtraction.model_validate(parsed).model_dump(mode="json")
@@ -467,11 +573,27 @@ def extract_ticket(path: str) -> tuple[dict[str, Any], str]:
         image = image.resize((int(image.width * 1.5), int(image.height * 1.5)), Image.Resampling.LANCZOS)
     image = ImageEnhance.Contrast(image).enhance(1.12)
     original_gray = ImageOps.grayscale(image)
-    original_words = _ocr_words(image, pytesseract)
-    original_parsed = _parse_ticket(image, original_words, original_gray, pytesseract)
+    passes = []
+    for psm in (6, 4, 11):
+        words = _ocr_words(image, pytesseract, psm)
+        parsed_pass = _parse_ticket(image, words, original_gray, pytesseract)
+        text_pass = "\n".join(_group_text(group) for group in _line_groups(words))
+        passes.append({"psm": psm, "words": words, "parsed": parsed_pass, "text": text_pass})
+    # Select the richest layout, preferring PSM 6 on ties, then fill missing
+    # scalar fields from alternate passes rather than letting one layout win all.
+    passes.sort(key=lambda item: (_parse_score(item["parsed"]), item["psm"] == 6), reverse=True)
+    best = passes[0]
+    original_words = best["words"]
+    original_parsed = best["parsed"]
+    for alternate in passes[1:]:
+        for key, value in alternate["parsed"].items():
+            if key != "items" and not original_parsed.get(key) and value:
+                original_parsed[key] = value
+        if len(alternate["parsed"].get("items") or []) > len(original_parsed.get("items") or []):
+            original_parsed["items"] = alternate["parsed"]["items"]
 
     cleaned_image = _repair_horizontal_strokes(image, original_words)
-    cleaned_words = _ocr_words(cleaned_image, pytesseract) if cleaned_image is not image else original_words
+    cleaned_words = _ocr_words(cleaned_image, pytesseract, best["psm"]) if cleaned_image is not image else original_words
     cleaned_text = "\n".join(_group_text(group) for group in _line_groups(cleaned_words))
     parsed = original_parsed
     # The repaired pass can recover a crossed-out label, but its pixel edits may
@@ -488,7 +610,8 @@ def extract_ticket(path: str) -> tuple[dict[str, Any], str]:
         item["void_confidence"] = "high" if item["signals"]["row_tint"] else "low"
     raw = json.dumps({
         "engine": "tesseract",
-        "original_text": "\n".join(_group_text(group) for group in _line_groups(original_words)),
+        "original_text": best["text"],
+        "alternate_texts": [{"psm": item["psm"], "text": item["text"]} for item in passes[1:]],
         "line_cleaned_text": cleaned_text,
         "extraction": parsed,
     }, ensure_ascii=False)

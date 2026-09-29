@@ -186,3 +186,26 @@
 - No-text/empty structured extraction now fails without leaving the staged image or duplicate hash; stale hashes are discarded. Failed image files are removed unless saved evidence references them.
 - Added compact copy actions on the summary boxes and discrepancy detail modal; text is formatted for pasting into Word.
 - Frontend production build, backend Python syntax compilation, upload-list manual query, and `git diff --check` passed. No automated tests were run.
+
+
+## Session 39 - 2026-09-29
+**Planned changes:**
+- Persist the Vite LAN bind address and stable preview port in project configuration.
+- Keep API calls working through the local Vite proxy and document the Ethernet preview setup.
+
+
+**Achieved:**
+- Persisted Vite LAN binding at 0.0.0.0:5173 with strict port selection and explicit loopback API proxying. Restarted the preview using plain `npm run dev`; it reports the Ethernet URL and both the page and proxied verification API return HTTP 200 through 172.16.16.125:5173.
+- The Windows firewall rule is enabled for LocalSubnet/Public. Remote device access still needs a same-subnet connection; this workspace cannot probe another physical device.
+- No automated tests were run.
+
+
+## Session 40 - 2026-09-29
+**Planned changes:**
+- Improve local ticket OCR so alternate text layouts can recover fields missed by a single Tesseract page segmentation pass.
+- Add label-aware text fallbacks for common scalar ticket fields and preserve all OCR passes for audit.
+
+**Achieved:**
+- Added multi-layout Tesseract parsing and fills missing scalar fields from alternate passes and label-anchored OCR text. Added headerless item-table recovery using ticket column geometry and multiline OCR for faint void rows; wrapped item names now stay with their item.
+- Manually reprocessed the current WhatsApp ticket 260927-118: saved its date, seven item rows, values, and the void-marked PESHAWRI CHAPLI KEBAB line into its existing record. This screenshot does not contain terminal, table, department, or user fields, so those remain blank rather than guessed.
+- Python compilation and `git diff --check` passed. No automated tests were run.

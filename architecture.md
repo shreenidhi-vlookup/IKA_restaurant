@@ -37,3 +37,9 @@ Install the Tesseract 5 Windows engine and the Python dependencies in `requireme
 
 
 Ticket item segment overlap fingerprints include name, price, quantity, total, modifier, and void state. Reprocessing the same screenshot replaces that source segment before running the existing overlap merge; repeated rows within one screenshot remain intact.
+
+## Local network preview
+Vite serves the frontend on all host interfaces at port 5173 and proxies /api to FastAPI at 127.0.0.1:8000. Keep the API loopback-bound; the LAN client uses the Vite origin. Allow inbound TCP 5173 from the local subnet in the host firewall.
+
+
+Ticket OCR runs Tesseract page modes 6, 4, and 11 and selects/merges the richest structured parse. It falls back to label-anchored plain-text fields and headerless POS-column geometry for cropped WhatsApp ticket details; tinted/struck rows receive a dedicated multiline OCR crop pass. Absent fields are not inferred from branch or item text.
