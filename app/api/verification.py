@@ -1,4 +1,5 @@
 import csv
+from difflib import SequenceMatcher
 import io
 import json
 import re
@@ -32,6 +33,22 @@ def _product_key(value: Any, learned_suffixes: set[str]) -> str:
         if suffix.strip() in learned_suffixes:
             text = base
     return re.sub(r"[^a-z0-9]+", "", text)
+
+
+def _text_match(left: Any, right: Any, threshold: float = 0.88) -> bool:
+    """Match OCR text conservatively after punctuation/case normalization."""
+    a, b = _norm(left), _norm(right)
+    if not a or not b:
+        return False
+    if a == b or set(a.split()) == set(b.split()):
+        return True
+    if min(len(a), len(b)) < 5:
+        return False
+    return SequenceMatcher(None, a, b).ratio() >= threshold
+
+
+def _product_match(left: Any, right: Any, learned_suffixes: set[str]) -> bool:
+    return _text_match(_product_key(left, learned_suffixes), _product_key(right, learned_suffixes), 0.86)
 
 
 def _day(value: Any) -> str:
@@ -126,8 +143,13 @@ def _ticket_candidates(row, tickets, branch, learned_suffixes):
             value_match = _match_num(item.get("total")) == _match_num(row["sales_value"])
             if item.get("total") is None and (_match_num(item.get("quantity")) or 0) == 1:
                 value_match = _match_num(item.get("unit_price")) == _match_num(row["sales_value"])
-            if (_norm(t["user_name"]) == _norm(row["user_name"]) and _norm(t["department"]) == _norm(row["department"]) and _norm(term) == _norm(row["till"]) and _product_key(item.get("name"), learned_suffixes) == _product_key(row["product"], learned_suffixes) and (_num(item.get("quantity")) or 0) == (_num(row["quantity"]) or 0) and value_match):
-                result.append((t, item))
+            product_match = _product_match(item.get("name"), row["product"], learned_suffixes)
+            quantity_match = (_num(item.get("quantity") or item.get("qty")) or 0) == (_num(row["quantity"]) or 0)
+            context_matches = all(_text_match(left, right) for left, right in ((t.get("user_name"), row.get("user_name")), (t.get("department"), row.get("department")), (term, row.get("till"))))
+            # Item, quantity, and price identify the transaction strongly enough to
+            # retain it for review even when a receipt field was misread by OCR.
+            if product_match and quantity_match and value_match:
+                result.append((t, item, not context_matches or _product_key(item.get("name"), learned_suffixes) != _product_key(row["product"], learned_suffixes)))
     return result
 
 
@@ -159,7 +181,9 @@ def build_verification(branch: str, selected_date: str):
             ticket_only = 0
             docket_only = 0
             all_candidates = _ticket_candidates(row, tickets, branch, learned_suffixes)
-            for ticket, item in all_candidates:
+            for ticket, item, ticket_needs_review in all_candidates:
+                if ticket_needs_review:
+                    review = True
                 if kind == "void" and not item.get("is_void"):
                     review = True
                     row["candidates"].append({"ticket": ticket, "ticket_item": item, "docket": None, "docket_item": None, "needs_review": True})
@@ -177,14 +201,12 @@ def build_verification(branch: str, selected_date: str):
                             continue
                         if kind == "void" and not (docket_item.get("is_void") or marker == "void"):
                             continue
-                        if _product_key(docket_item.get("name"), learned_suffixes) != _product_key(row["product"], learned_suffixes):
+                        if not _product_match(docket_item.get("name"), row["product"], learned_suffixes):
                             continue
-                        if _norm(docket.get("staff_name")) != _norm(ticket.get("user_name")):
-                            continue
-                        if _norm(docket.get("department")) != _norm(ticket.get("department")):
-                            continue
+                        # Keep item/order/date-supported readings visible if another
+                        # extracted field conflicts; the conflict is handled below.
                         docket_matches.append((docket, docket_item))
-                if len(docket_matches) > 1 or (related and not docket_matches) or any(d.get("review_required") for d in related):
+                if len(docket_matches) > 1 or (related and not docket_matches) or any(d.get("review_required") or not _text_match(d.get("staff_name"), ticket.get("user_name")) or not _text_match(d.get("department"), ticket.get("department")) for d, _ in docket_matches):
                     review = True
                 if not related:
                     ticket_only += 1
@@ -192,14 +214,17 @@ def build_verification(branch: str, selected_date: str):
                 if related and not docket_matches:
                     row["candidates"].extend({"ticket": ticket, "ticket_item": item, "docket": docket, "needs_review": True} for docket in related)
                 for docket, docket_item in docket_matches:
-                    ticket_qty = _match_num(item.get("quantity")) or 1
+                    ticket_qty = _match_num(item.get("quantity") or item.get("qty")) or 1
                     docket_qty = _match_num(docket_item.get("quantity") or docket_item.get("qty"))
-                    candidates.append({"ticket": ticket, "ticket_item": item, "docket": docket, "docket_item": docket_item, "pair_count": max(1, int(min(ticket_qty, docket_qty if docket_qty is not None else ticket_qty)))})
+                    uncertain = ticket_needs_review or docket.get("review_required") or not _text_match(docket.get("staff_name"), ticket.get("user_name")) or not _text_match(docket.get("department"), ticket.get("department")) or _product_key(docket_item.get("name"), learned_suffixes) != _product_key(row["product"], learned_suffixes)
+                    if uncertain:
+                        row["candidates"].append({"ticket": ticket, "ticket_item": item, "docket": docket, "docket_item": docket_item, "needs_review": True})
+                    else:
+                        candidates.append({"ticket": ticket, "ticket_item": item, "docket": docket, "docket_item": docket_item, "pair_count": max(1, int(min(ticket_qty, docket_qty if docket_qty is not None else ticket_qty)))})
             docket_only_matches = []
+            docket_review_matches = []
             for docket in dockets:
                 if _day(docket.get("docket_date")) != _day(row.get("row_date")):
-                    continue
-                if _norm(docket.get("staff_name")) != _norm(row.get("user_name")) or _norm(docket.get("department")) != _norm(row.get("department")):
                     continue
                 for docket_item in _docket_items(docket):
                     if not (docket_item.get("is_void") or docket_item.get("marker_type")):
@@ -208,15 +233,23 @@ def build_verification(branch: str, selected_date: str):
                     allowed_types = {"void"} if kind == "void" else {"cancel", "cancelled"} if kind == "cancel" else {"promotion", "promotions", "discount"}
                     if marker and marker not in allowed_types:
                         continue
-                    if _product_key(docket_item.get("name"), learned_suffixes) == _product_key(row["product"], learned_suffixes):
-                        docket_only_matches.append({"ticket": None, "ticket_item": None, "docket": docket, "docket_item": docket_item})
+                    if _product_match(docket_item.get("name"), row["product"], learned_suffixes):
+                        candidate = {"ticket": None, "ticket_item": None, "docket": docket, "docket_item": docket_item}
+                        context_matches = _text_match(docket.get("staff_name"), row.get("user_name")) and _text_match(docket.get("department"), row.get("department"))
+                        if context_matches and not docket.get("review_required"):
+                            docket_only_matches.append(candidate)
+                        else:
+                            docket_review_matches.append({**candidate, "needs_review": True})
             if not all_candidates and docket_only_matches:
                 docket_only = len(docket_only_matches)
                 row["candidates"].extend(docket_only_matches)
-            elif all_candidates and docket_only_matches and not candidates:
+            if docket_review_matches:
+                review = True
+                row["candidates"].extend(docket_review_matches)
+            if all_candidates and docket_only_matches and not candidates:
                 review = True
                 row["candidates"].extend({**candidate, "needs_review": True} for candidate in docket_only_matches)
-            if kind == "void" and all_candidates and not any(item.get("is_void") for _, item in all_candidates):
+            if kind == "void" and all_candidates and not any(item.get("is_void") for _, item, _ in all_candidates):
                 review = True
             need = max(int(count + 0.999999), int((row["quantity"] or 0) + 0.999999) if count > 0 else 0)
             pair_count = sum(candidate.get("pair_count", 1) for candidate in candidates)

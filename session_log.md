@@ -173,3 +173,16 @@
 - The retry remains queued for the next worker restart. Failed jobs record the provider so this automatic migration retry occurs only once.
 
 - After the storage and same-source merge fixes, the saved failed docket image completed through the existing worker with provider `gemini`: two docket views saved as one docket record, including order 130, date/time, table/covers, and the void-marked GAJAR KA HALWA line. Conflicting department readings remain flagged for review.
+
+
+## Session 37 - 2026-09-29
+**Planned changes:**
+- Correct duplicate handling so only active or successfully extracted image hashes suppress repeat uploads; discard staged image files when no content is extracted.
+- List saved ticket/docket image uploads with preview and per-image delete that removes linked evidence safely.
+- Add copy actions to each dashboard summary box and to the selected discrepancy detail for Word-friendly plain text.
+
+**Achieved:**
+- Confirmed `test.jpeg` was already successfully extracted by Gemini and saved; its later duplicate skips were correct. Added saved-upload listing and deletion so the operator can remove that photo and its linked record before reuploading.
+- No-text/empty structured extraction now fails without leaving the staged image or duplicate hash; stale hashes are discarded. Failed image files are removed unless saved evidence references them.
+- Added compact copy actions on the summary boxes and discrepancy detail modal; text is formatted for pasting into Word.
+- Frontend production build, backend Python syntax compilation, upload-list manual query, and `git diff --check` passed. No automated tests were run.

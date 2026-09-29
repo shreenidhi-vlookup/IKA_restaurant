@@ -17,6 +17,7 @@ from app.storage.db import (
     get_db_connection,
     get_docket_record,
     get_ticket_record,
+    _merge_ticket_segments,
     upsert_ticket_record,
 )
 
@@ -45,7 +46,30 @@ def _add_audit(kind: str, filename: str, raw: str):
 
 def _duplicate(kind: str, file_hash: str):
     with get_db_connection() as conn:
-        return conn.execute("SELECT filename FROM upload_hashes WHERE kind=? AND file_hash=?", (kind, file_hash)).fetchone()
+        remembered = conn.execute("SELECT filename FROM upload_hashes WHERE kind=? AND file_hash=?", (kind, file_hash)).fetchone()
+        if not remembered:
+            return None
+        filename = remembered['filename']
+        directory = TICKET_DIR if kind == 'ticket' else DOCKET_DIR
+        path_exists = os.path.isfile(os.path.join(directory, filename))
+        jobs = conn.execute("SELECT status,provider FROM extraction_jobs WHERE kind=? AND stored_filename=?", (kind, filename)).fetchall()
+        active = any(row['status'] in {'queued', 'processing'} for row in jobs)
+        extracted = any(row['status'] == 'done' and row['provider'] for row in jobs)
+        referenced = False
+        if kind == 'ticket':
+            records = conn.execute("SELECT screenshot_filenames FROM ticket_records").fetchall()
+            referenced = any(filename in json.loads(row['screenshot_filenames'] or '[]') for row in records)
+            referenced = referenced or conn.execute("SELECT 1 FROM unassigned_screenshots WHERE filename=?", (filename,)).fetchone() is not None
+        else:
+            records = conn.execute("SELECT image_filename,image_filenames FROM docket_records").fetchall()
+            referenced = any(row['image_filename'] == filename or filename in json.loads(row['image_filenames'] or '[]') for row in records)
+        if not path_exists or not (active or extracted or referenced):
+            conn.execute("DELETE FROM upload_hashes WHERE kind=? AND file_hash=?", (kind, file_hash))
+            if path_exists and not referenced and not active:
+                os.remove(os.path.join(directory, filename))
+            conn.commit()
+            return None
+        return remembered
 
 
 def _remember_hash(kind: str, file_hash: str, filename: str, record_id: int | None = None):
@@ -58,6 +82,32 @@ def _forget_hash(kind: str, file_hash: str):
     with get_db_connection() as conn:
         conn.execute('DELETE FROM upload_hashes WHERE kind=? AND file_hash=?', (kind, file_hash))
         conn.commit()
+
+
+def _has_extracted_text(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return any(_has_extracted_text(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has_extracted_text(item) for item in value)
+    return False
+
+
+def _image_is_referenced(kind: str, filename: str) -> bool:
+    with get_db_connection() as conn:
+        if kind == 'ticket':
+            rows = conn.execute("SELECT screenshot_filenames FROM ticket_records").fetchall()
+            return any(filename in json.loads(row['screenshot_filenames'] or '[]') for row in rows) or conn.execute("SELECT 1 FROM unassigned_screenshots WHERE filename=?", (filename,)).fetchone() is not None
+        rows = conn.execute("SELECT image_filename,image_filenames FROM docket_records").fetchall()
+        return any(row['image_filename'] == filename or filename in json.loads(row['image_filenames'] or '[]') for row in rows)
+
+
+def _remove_image_file(kind: str, filename: str):
+    directory = TICKET_DIR if kind == 'ticket' else DOCKET_DIR
+    path = os.path.join(directory, filename)
+    if os.path.isfile(path):
+        os.remove(path)
 
 
 def _ticket_storage(parsed: dict[str, Any], filename: str, file_hash: str, branch: str, raw_text: str = ""):
@@ -160,6 +210,10 @@ def _save_extracted_job(job: dict[str, Any]):
             _add_audit(f'{kind}:gemini', job['stored_filename'], gemini_error.raw_json)
             raise RuntimeError(f'Gemini docket extraction failed: {gemini_error}') from gemini_error
 
+    recognized_ticket_text = kind == 'ticket' and any(text.strip() for text in _ticket_texts(raw))
+    if not _has_extracted_text(parsed) and not recognized_ticket_text:
+        raise ValueError('No text or structured fields were extracted; image was not saved')
+
     if kind == 'ticket':
         ticket_id = str(parsed.get('ticket_id') or '').strip().lstrip('#')
         issues = []
@@ -229,7 +283,10 @@ async def _worker():
                 _job_update(job_id, 'done', message, provider=provider)
             except Exception as exc:
                 log.exception('Vision extraction failed for %s', job['original_filename'])
-                _forget_hash(job['kind'], job['file_hash'])
+                referenced = _image_is_referenced(job['kind'], job['stored_filename'])
+                if not referenced:
+                    _forget_hash(job['kind'], job['file_hash'])
+                    _remove_image_file(job['kind'], job['stored_filename'])
                 failed_provider = 'gemini' if job['kind'] == 'docket' else 'tesseract_ocr'
                 _job_update(job_id, 'failed', 'Extraction failed', provider=failed_provider, error=str(exc))
         finally:
@@ -293,11 +350,12 @@ async def _batch(files: list[UploadFile], kind: str, branch: str, selected_date:
             directory = TICKET_DIR if kind == 'ticket' else DOCKET_DIR
             with open(os.path.join(directory, stored), 'wb') as output:
                 output.write(contents)
-            _remember_hash(kind, file_hash, stored)
             status, message = 'queued', 'Waiting for an extraction worker'
         with get_db_connection() as conn:
             conn.execute('INSERT INTO extraction_jobs(job_id,batch_id,kind,original_filename,stored_filename,file_hash,branch,selected_date,status,message) VALUES(?,?,?,?,?,?,?,?,?,?)',
                          (job_id, batch_id, kind, original, stored, file_hash, branch, selected_date, status, message))
+            if status == 'queued':
+                conn.execute('INSERT OR IGNORE INTO upload_hashes(kind,file_hash,filename) VALUES(?,?,?)', (kind, file_hash, stored))
             conn.commit()
         if status == 'queued':
             assert _job_queue is not None
@@ -329,6 +387,111 @@ def get_upload_jobs(batch_id: str):
     with get_db_connection() as conn:
         rows = conn.execute('SELECT job_id,original_filename AS filename,status,message,provider,error,created_at,updated_at FROM extraction_jobs WHERE batch_id=? ORDER BY created_at,job_id', (batch_id,)).fetchall()
     return {'batch_id': batch_id, 'jobs': [dict(row) for row in rows]}
+
+
+@router.get('/uploads')
+def get_uploads(branch: str, selected_date: str):
+    with get_db_connection() as conn:
+        rows = conn.execute('''SELECT kind,original_filename,stored_filename,status,message,provider,error,created_at
+            FROM extraction_jobs WHERE branch=? AND selected_date=? AND stored_filename<>''
+            ORDER BY created_at DESC''', (branch, selected_date)).fetchall()
+    grouped = {}
+    priority = {'done': 3, 'processing': 2, 'queued': 2, 'failed': 1}
+    for row in rows:
+        key = (row['kind'], row['stored_filename'])
+        if not os.path.isfile(os.path.join(TICKET_DIR if row['kind'] == 'ticket' else DOCKET_DIR, row['stored_filename'])):
+            continue
+        item = dict(row)
+        current = grouped.get(key)
+        item_priority = (int(bool(item['provider'])), priority.get(item['status'], 0))
+        if current is None:
+            grouped[key] = item
+            continue
+        current_priority = (int(bool(current['provider'])), priority.get(current['status'], 0))
+        if item_priority > current_priority:
+            grouped[key] = item
+    return [
+        {**item, 'url': f"/api/images/{'ticket_screenshots' if item['kind'] == 'ticket' else 'dockets'}/{item['stored_filename']}"}
+        for item in sorted(grouped.values(), key=lambda x: x['created_at'], reverse=True)
+    ]
+
+
+@router.get('/dockets')
+def get_dockets(branch: str, selected_date: str):
+    with get_db_connection() as conn:
+        records = conn.execute('SELECT * FROM docket_records WHERE selected_branch=? ORDER BY id DESC', (branch,)).fetchall()
+        uploaded = {row['stored_filename'] for row in conn.execute(
+            "SELECT stored_filename FROM extraction_jobs WHERE kind='docket' AND branch=? AND selected_date=? AND stored_filename<>''",
+            (branch, selected_date),
+        ).fetchall()}
+    result = []
+    for record in records:
+        item = dict(record)
+        filenames = json.loads(item.get('image_filenames') or '[]')
+        filenames = filenames or ([item['image_filename']] if item.get('image_filename') else [])
+        if uploaded.intersection(filenames):
+            result.append(item)
+    return result
+
+
+@router.delete('/uploads/{kind}/{filename}')
+def delete_upload(kind: str, filename: str):
+    if kind not in {'ticket', 'docket'} or not re.fullmatch(r'[A-Za-z0-9._-]+', filename):
+        raise HTTPException(400, 'Invalid upload')
+    directory = TICKET_DIR if kind == 'ticket' else DOCKET_DIR
+    image_path = os.path.join(directory, filename)
+    audit_kind = 'ticket:tesseract' if kind == 'ticket' else 'docket:gemini'
+    with get_db_connection() as conn:
+        jobs = conn.execute('SELECT branch,selected_date,status FROM extraction_jobs WHERE kind=? AND stored_filename=?', (kind, filename)).fetchall()
+        if not jobs:
+            raise HTTPException(404, 'Upload not found')
+        if any(row['status'] in {'queued', 'processing'} for row in jobs):
+            raise HTTPException(409, 'Wait for extraction to finish before deleting this image')
+
+        if kind == 'ticket':
+            records = conn.execute('SELECT * FROM ticket_records').fetchall()
+            for record in records:
+                screenshots = json.loads(record['screenshot_filenames'] or '[]')
+                if filename not in screenshots:
+                    continue
+                remaining = [name for name in screenshots if name != filename]
+                if not remaining:
+                    conn.execute('DELETE FROM ticket_records WHERE ticket_id=?', (record['ticket_id'],))
+                    continue
+                segments = [segment for segment in json.loads(record['screenshot_segments'] or '[]') if segment.get('filename') != filename]
+                items, _ambiguous = _merge_ticket_segments(segments)
+                conn.execute('UPDATE ticket_records SET screenshot_filenames=?,screenshot_segments=?,items=?,updated_at=CURRENT_TIMESTAMP WHERE ticket_id=?', (json.dumps(remaining), json.dumps(segments), json.dumps(items), record['ticket_id']))
+                conn.execute('DELETE FROM ticket_items WHERE ticket_id=?', (record['ticket_id'],))
+                for item in items:
+                    signals = item.get('signals') or {}
+                    conn.execute('''INSERT INTO ticket_items(ticket_id,item,modifier,category,price,qty,total,is_void,row_tint,strikethrough_line,void_label_text,void_confidence,review_flags)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''', (record['ticket_id'], item.get('name') or item.get('item'), item.get('modifier'), item.get('category'), item.get('price'), item.get('qty') or item.get('quantity'), item.get('total'), int(bool(item.get('is_void'))), int(bool(signals.get('row_tint') or item.get('row_tint'))), int(bool(signals.get('strikethrough_line') or item.get('strikethrough_line'))), int(bool(signals.get('void_label_text') or item.get('void_label_text'))), item.get('void_confidence'), json.dumps(item.get('review_flags') or [])))
+            conn.execute('DELETE FROM unassigned_screenshots WHERE filename=?', (filename,))
+        else:
+            records = conn.execute('SELECT * FROM docket_records').fetchall()
+            for record in records:
+                images = json.loads(record['image_filenames'] or '[]')
+                if filename not in images and record['image_filename'] != filename:
+                    continue
+                remaining = [name for name in images if name != filename]
+                if not remaining:
+                    conn.execute('DELETE FROM docket_records WHERE id=?', (record['id'],))
+                    continue
+                views = [view for view in json.loads(record['item_views'] or '[]') if view.get('filename') != filename]
+                items, _ambiguous = _merge_ticket_segments(views)
+                marked = [item for item in items if item.get('is_void') or item.get('marker_type')]
+                conn.execute('''UPDATE docket_records SET image_filename=?,image_filenames=?,item_views=?,item_lines=?,item=?,multiple_dockets=? WHERE id=?''', (remaining[0], json.dumps(remaining), json.dumps(views), json.dumps(items), '; '.join(item.get('name') or '' for item in marked) or None, int(bool(len(views) > 1)), record['id']))
+
+        conn.execute('DELETE FROM upload_hashes WHERE kind=? AND filename=?', (kind, filename))
+        conn.execute('DELETE FROM upload_audits WHERE kind=? AND filename=?', (audit_kind, filename))
+        conn.execute('DELETE FROM extraction_jobs WHERE kind=? AND stored_filename=?', (kind, filename))
+        conn.commit()
+
+    _remove_image_file(kind, filename)
+    affected = {(row['branch'], row['selected_date']) for row in jobs}
+    for affected_branch, affected_date in affected:
+        build_verification(affected_branch, affected_date)
+    return {'deleted': True, 'filename': filename}
 
 @router.get("/tickets/unassigned")
 def get_unassigned_tickets(branch: str, selected_date: str):

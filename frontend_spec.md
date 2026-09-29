@@ -15,13 +15,15 @@ After import, render one horizontal row of five clickable boxes:
 
 Boxes have a clear active state. Clicking Void, Cancel, or Promotions opens the corresponding CSV rows; Total opens all rows; Status opens unresolved flagged rows. Each row shows product, quantity, user, department, till, value, and status badge: Pending, Partial (including e.g. 1 of 2 verified), Verified, or Needs review.
 
-Clicking a row displays a detail view. Show CSV data beside ticket and docket evidence, including ticket ID, branch/date, terminal, table, department/user, matched item void flags, totals, and ticket thumbnail; docket order/date/time, item/type, handwritten description and docket thumbnail. Null description uses a visible **No description** warning and remains Verified. List all candidates for ambiguous review states.
+Each summary dashboard box has a small copy action that copies its summary and row details as plain text. Clicking a row displays a detail view with a Copy details action for pasting the CSV, ticket, and docket evidence into Word. Show CSV data beside ticket and docket evidence, including ticket ID, branch/date, terminal, table, department/user, matched item void flags, totals, and ticket thumbnail; docket order/date/time, item/type, handwritten description and docket thumbnail. Null description uses a visible **No description** warning and remains Verified. List all candidates for ambiguous review states.
 
 ## Evidence upload
-Below the boxes, show separate bulk controls for ticket screenshots and docket photos (up to 30 each). Uploads require selected branch/date and an imported CSV. The selected branch is retained as an association on each image record. Report per-file success/failure and automatically refresh verification after each batch. There is no Process button.
+Below the boxes, show separate bulk controls for ticket screenshots and docket photos (up to 30 each). Each box shows the saved upload count; clicking it opens a manager where users can preview, replace, or delete individual images. Keep photo previews off the main page. Uploads require selected branch/date and an imported CSV. The selected branch is retained as an association on each image record. Report per-file success/failure and automatically refresh verification after each batch. There is no Process button.
+
+Saved ticket and docket extraction records are displayed in their own tables for the selected branch/day. Docket rows include extracted item text, nested item lines with void markers, handwritten reason, and review/conflict/partial-field indicators.
 
 ## API contract
-Use POST /api/csv, GET /api/verification, GET /api/verification/dates, POST /api/upload/tickets, POST /api/upload/dockets, and /api/images/... exactly as documented in mvp_spec.md. Client only displays backend matching results; it must not infer matches.
+Use POST /api/csv, GET /api/verification, GET /api/verification/dates, POST /api/upload/tickets, POST /api/upload/dockets, GET/DELETE /api/uploads, and /api/images/... exactly as documented in mvp_spec.md. Client only displays backend matching results; it must not infer matches.
 
 ## Evidence detail and exception UI
 Ticket upload responses distinguish saved, `duplicate, skipped`, held for confirmation, and per-file failure. Held screenshots appear in a ticket-ID assignment list; entering an ID that conflicts with the selected branch/day requires a second explicit confirmation. Partial ticket-only and docket-only candidates remain visible in row details.
