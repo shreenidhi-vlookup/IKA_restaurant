@@ -1,19 +1,5 @@
-# React + Vite
+# TIL CSV Verification UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Select a restaurant branch and date, upload one till CSV, review the five summary boxes, then upload ticket screenshots and docket photos. The UI refreshes verification after each saved image batch; matching is provided only by the backend.
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
-
-Note: This will impact Vite dev & build performances.
-You can also try [the experimental native React Compiler support in plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md#rust-react-compiler) by using `compiler: true` in the plugin options instead of using the Babel plugin.
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+Backend API details and the exact box/status behavior are in ../frontend_spec.md. Start the Vite development server with npm run dev; it proxies /api to the FastAPI service at http://localhost:8000.

@@ -1,140 +1,46 @@
-# MVP SPEC — TIL SYSTEM
+# MVP spec — CSV-driven discrepancy verification
 
-## 1. Problem
-Three restaurants send images of their bills. Each bill may contain a
-discrepancy of one of three types:
-- **Void**
-- **Discount**
-- **Promotion**
+## Purpose
+Operators compare a till item CSV for one restaurant branch and business date with POS ticket screenshots and printed discrepancy dockets. Backend extraction and matching are authoritative.
 
-An operator works in a separate custom app that has tickets (by ticket
-number). To check out a void/discount/promo on a ticket, the operator needs
-to find the matching bill image sent by the restaurant. Today that search is
-manual. Some images arrive with no description, in which case the operator
-must be prompted to supply one before it's usable.
+## Workflow
+1. Select branch (Haweli Restaurant Southall, Haweli Restaurant Norbury, or Haweli Ilford Ltd) and date.
+2. Upload one CSV. The parser finds the header containing **Product Name**, skips blank lines, handles CRLF, and stores every row under branch/date. The first-line totals are informational only. A mismatching row date requires an explicit confirmation.
+3. Show five horizontal boxes: Total (row count and quantity), Void, Cancel, Promotions, Status. Flag columns use their numeric values. Promotion is **Not in file** when no promotion/discount column exists; Gift is not a promotion.
+4. Clicking a discrepancy box shows matching CSV rows and Pending, Partial, Verified, or Needs review status. Clicking a verified row shows the CSV row beside exact ticket and docket fields and image thumbnails. Missing handwriting is shown as **No description**, without downgrading Verified.
+5. Upload batches of up to 30 ticket screenshots or dockets. Local Tesseract OCR parses ticket screenshots; Gemini vision extracts printed and handwritten docket data. Saved files automatically trigger backend reconciliation and UI refresh. Batch failures are reported by filename.
 
-## 2. What this system does (MVP scope)
-1. **Accept bill images as input** (single upload or a batch of up to 30 images).
-2. **Extract all text from each image** (OCR / text extraction).
-3. **Build two dedicated structured datasets** from the extracted data.
-   Tickets use `ticket_id` and a related `ticket_items` sub-table containing
-   `item`, `category`, `price`, `qty`, `total`, and `is_void`; ticket scalar
-   fields are date, terminal, table, department, user, payment_status,
-   credit_card, ticket_total, grand_total, and charged. Dockets use
-   `order_number`, marker-adjacent `item`, `discrepancy_type`, and handwriting-
-   only `description`. Missing values are null and unknown labels go to
-   `extra_fields`; OCR audit text is never a parsed display field. No shared
-   ticket/docket display table is used.
-4. **Export the table to CSV** via a button.
+## Parsing and verification
+- Ticket identity keeps its complete YYMMDD-N string. The date for matching comes from its YYMMDD prefix. Ticket fields/line items are merged by ID; filled values survive blank screenshots and only new items append. Item overlap uses name, price, quantity, total, modifier, and void state, preserving legitimate repeated names.
+- Ticket scalar fields map to `ticket_records`: `ticket_id`, `restaurant`, `ticket_date`, `terminal`, `table_name`, `department`, `user_name`, `payment_status`, `credit_card_amount`, `ticket_total`, `grand_total`, and `charged`. `ticket_items` stores each ordered row as `item`, `modifier`, `category`, `price`, `qty`, `total`, and `is_void`, with `row_tint`, `strikethrough_line`, `void_label_text`, `void_confidence`, and `review_flags` saved alongside it.
+- Ticket-to-CSV matching requires same day, case-insensitive user, department, terminal/till, normalized product, quantity, and value. Strip trailing (Void) and price modifier lines. Missing/conflicting/non-exact fields are never auto-verified.
+- Each image batch is associated with the selected branch. Docket order number equals the full trailing ticket ID digits exactly. Docket item and staff must agree. Multiple candidates remain Needs review.
+- Flag count and quantity determine required pair count. Show partial counts when fewer matched pairs exist.
+- Docket description is handwritten text only; absent handwriting is null. Preserve confidence, image review flag, extra fields, and raw Gemini JSON by file. Ticket OCR retains both the original recognized text and the line-cleaned pass in its per-file audit.
 
-> Extraction detail (v4, see decisions.md): Tesseract `--oem 3 --psm 6`
-> over a preprocessed image (grayscale, upscaling, autocontrast, OSD deskew
-> only when the orientation confidence is >= 5.0). The OCR text is then split
-> into blocks; `discrepancy_type` comes from line-item markers only, and a
-> marker that cannot be confidently bound to a line item flags the row
-> `needs_review` instead of guessing. Every parsed-value fix is recorded in
-> the block's `corrections` list for auditability.
+## API
+- POST /api/csv multipart branch, selected_date, file, optional confirm_date_mismatch.
+- GET /api/verification?branch=…&selected_date=… provides rows, statuses, candidates, and box summary.
+- GET /api/verification/dates?branch=… lists saved CSV dates with source filename and row counts; the operator can open a prior date's discrepancy rows.
+- POST /api/upload/tickets and /api/upload/dockets accept files batches and branch/date form fields.
+- GET /api/images/{ticket_screenshots|dockets}/{filename} serves matched evidence images.
 
-## 3. Explicitly out of scope for MVP
-- Automated tests (see rules.md)
-- Multi-user auth / roles
-- Automated deployment pipeline
-- Editing/annotating the image itself
-- Any UI polish beyond "professional and usable" (frontend_spec.md governs the bar)
-- Direct integration with the custom app's API (searching happens by the
-  operator using ticket number as the lookup key — not a live sync, unless
-  later decided otherwise in decisions.md)
+## Stack and setup
+FastAPI, React/Vite, SQLite, local Tesseract OCR for ticket screenshots, and Gemini vision for docket photos. Set GEMINI_API_KEY and GEMINI_MODEL in the project-root .env file; app startup loads them through python-dotenv. Ticket OCR uses the pytesseract Python wrapper plus the separate Tesseract OCR 5 executable. Install Python dependencies on the operator's machine with `python -m pip install -r requirements.txt`; install the Windows Tesseract engine separately and make it available on PATH or configure TESSERACT_CMD. Previous CSV imports remain browsable by branch/date. No test suite is part of this MVP; acceptance is manual.
 
-## 4. Actors
-- **Restaurant owner** — sends bill image (no system access assumed for MVP)
-- **Operator** — uploads images, reviews extracted table, supplies missing
-  descriptions, exports CSV
-- **(Separate) UI developer** — builds frontend against `frontend_spec.md`
+## Ticket and docket evidence rules
+- Ticket IDs must match `^\d{6}-\d+$`. Unreadable IDs and branch/day mismatches stay in an unassigned queue until the operator enters an ID and explicitly confirms mismatches.
+- Exact image bytes are keyed by SHA-256 per upload type; repeats report `duplicate, skipped`. Ticket screenshots are EXIF-corrected and passed to local Tesseract `image_to_data` for positioned OCR. The OCR path repairs long horizontal strokes inside detected item-table rows for a corroborating pass, while original pixels supply row tint and strikethrough signals. The repaired pass may confirm a literal `(Void)` suffix but cannot override item names or amounts from the original pass. A row is void when its relative pink tint or strikethrough signal fires; strikethrough without tint is marked low confidence for review. Each item stores `modifier`, `row_tint`, `strikethrough_line`, `void_label_text`, `void_confidence`, and review flags. Both OCR text passes and the parsed structured ticket are audited per file. Docket images go to Gemini vision for structured extraction, including handwriting.
+- Ticket screenshots with the same ID merge filled info fields and ordered item segments. Only matching end/start item runs are overlap-dropped; repeated lines within a segment remain. Unorderable segments set `possible gap: a screenshot may be missing`; conflicting totals and item-total discrepancies are review flags.
+- Dockets merge by branch/date/order/time and compatible void-item sets. Complementary item views and every source image are retained; conflicting readings and cropped fields are shown for review. Same order with different time or distinct void items remains separate. Unmarked lines remain normal items.
+- Matching is backend-only. Ticket-to-CSV requires exact normalized identity and amount/quantity fields; docket-to-ticket requires exact trailing order digits plus item, staff, department, and day. Each verified pair contributes only the supported quantity. Ambiguity or conflicts require review; ticket-only and docket-only evidence is Partial.
+- GET `/api/tickets/unassigned` and POST `/api/tickets/resolve` list and assign held screenshots.
 
-## 5. Core flow
-1. Operator uploads ticket screenshots or docket images through their
-  dedicated bulk control.
-2. Backend extracts and persists structured rows in the matching dataset.
-3. The upload result remains visible; parsed data stays collapsed until its
-  dataset's **Show data** button is clicked.
-4. Operator expands ticket items or reviews docket marker/handwriting fields.
-5. Operator exports through the matching dedicated CSV endpoint.
+## Structured extraction schemas
+Ticket OCR output and Gemini docket output are validated against strict Pydantic extraction models. Gemini receives the docket JSON schema and its response is validated locally against the same strict model.
 
-## 6. Tech stack
-- **Backend:** FastAPI (owns extraction — this is the core/hard part)
-- **Frontend:** built separately by teammate, per `frontend_spec.md`
-- **Extraction:** OCR method TBD — record the chosen library/service in
-  `decisions.md` once picked (e.g. Tesseract, cloud OCR API, etc.)
-- **Storage:** TBD for MVP — likely flat file/SQLite is enough; record choice
-  in `decisions.md`
-
-## 7. Ticket screenshot upload
-`POST /api/upload/tickets` accepts up to 30 ticket screenshots in multipart
-field `files`. Each image is OCR-parsed for the observed `#YYMMDD-N` Ticket ID,
-known ticket metadata, item rows, and void markers. Missing fields are allowed;
-unrecognized labeled fields are captured in `extra_fields`.
-
-Screenshots are merged into one SQLite ticket record by normalized Ticket ID.
-Items are appended only when item name, quantity, and unit price are new.
-Populated scalar fields are preserved when later screenshots are blank, and
-voided items are stored with `is_void: true`. Each screenshot remains recorded
-as provenance. Failures are returned per image without stopping the batch.
-Ticket screenshots detected in the generic image upload path are redirected to
-this same ticket pipeline before bill parsing; they never create an `entries`
-row. The complete ID string, including its hyphen (for example `260920-143`),
-is retained as the ticket identifier.
-
-## 8. Docket upload
-`POST /api/upload/dockets` accepts up to 30 docket images in multipart field
-`files`. Each stored docket has `docket_order_no`, `docket_date`,
-`docket_time`, `item`, printed `discrepancy_type`, and a separate
-`handwritten_reason`. Unknown labeled printed fields are stored in
-`extra_fields`, while `printed_text` and `raw_text` remain available for audit.
-
-`docket_order_no` is only a weak partial match key for the trailing integer in
-a ticket ID; it is never converted into or stored as a full Ticket ID. The
-docket date and time are captured for later tie-breaking. If one image appears
-to contain multiple order numbers, or the parser cannot isolate an order and
-discrepancy marker, the record is stored with `review_required: true` rather
-than guessing the intended docket.
-
-## 9. Void reconciliation
-`GET /api/reconcile/voids` returns `{rows, summary}`. Each row contains one
-voided ticket item, its trailing order number, a selected docket when uniquely
-matched, all `docket_candidates` when a collision remains ambiguous, a
-`status` of `matched`, `needs_review`, or `unmatched`, and a stable
-`row_position`. Rows sort matched pairs first, then review rows, then
-unmatched voids. Date matching may resolve a collision only when exactly one
-docket date matches the ticket date; otherwise all candidates remain visible.
-
-`GET /api/reconcile/voids/export` emits the same rows in the same
-`row_position` order, including ticket item, docket reason, and candidate IDs.
-
-## 10. Changelog
-> Every change to scope, flow, or fields gets a dated entry here. Keep it in
-> sync with `decisions.md`.
-
-| Date | Change | Reason |
-|------|--------|--------|
-| —    | Initial spec created | — |
-| 2026-09-18 | Selected Tesseract OCR for text extraction | Open-source, offline-capable, suitable for messy phone photos, no API costs |
-| 2026-09-18 | Selected SQLite for storage layer | Simple, file-based, zero-configuration, sufficient for MVP |
-| 2026-09-18 | Selected regex/keyword matching for text parsing | Extract ticket number (6+ digits) and discrepancy type (void/discount/promotion keywords); restaurant and description left for user input |
-| 2026-09-18 | Added CSV export functionality with filtering support | Exports filtered/same view as /entries endpoint; exports image filename/path instead of thumbnail |
-| 2026-09-18 | Export image filename/path in CSV (instead of thumbnail) | Thumbnail cannot be exported to CSV; filename/path allows referencing original image |
-| 2026-09-18 | Enhanced field parsing with schema flexibility | Improved restaurant name extraction, ticket number detection, description extraction, and extra_fields capture for unexpected bill fields |
-| 2026-09-18 | Added extra_fields to Entry model | Capture unexpected bill fields (Table, Staff, Terminal, Staff, Terminal, etc.) in a generic key/value bucket rather than discarding them |
-| 2026-09-18 | Enhanced status handling | Added statuses for specific missing field scenarios: needs_ticket_number, needs_restaurant, needs_discrepancy_type, needs_review |
-| 2026-09-18 | Added image_filename to Entry model | Store uploaded image filename with each entry for CSV export reference |
-| 2026-09-18 | Retained regex/rule-based parsing over LLM | Bills have semi-structured layouts; rule-based with multiple patterns and graceful degradation is sufficient for MVP and avoids external dependencies |
-| 2026-09-21 | OCR preprocessing + block segmentation | Per-entry structured `blocks` (header / line_items / discrepancies / totals / payment) persisted as JSON; auditable value corrections; `discrepancy_type` from line-item markers only; low-confidence markers -> `needs_review` |
-| 2026-09-21 | OSD deskew gated on confidence >= 5.0 | Dense numeric tables spuriously report 180° rotation at low confidence and get garbled |
-| 2026-09-21 | Status precedence: restaurant > ticket > discrepancy_type > review > description > matched | Review of unbound markers beats "matched"; never guess |
-| 2026-09-21 | Added synchronous bulk image upload via `POST /upload/bulk`, capped at 30 images with per-image failure reporting | Supports 20-30 WhatsApp bill images while preserving the existing `/upload` contract |
-| 2026-09-21 | Added Division 4c ticket-to-image reconciliation with ticket-level `Matched` / `Missing` / `Needs Review`, match confidence, handwritten note capture, and operator-facing reason validity | This task consumes ticket records and image entries together; it must surface uncertainty explicitly instead of silently auto-approving |
-| 2026-09-21 | Added bulk ticket screenshot upload and merge-by-Ticket-ID storage | Ticket PDFs omit voided item details; multiple app screenshots must build one complete ticket without duplicate records |
-| 2026-09-21 | Added bulk docket upload with separate printed fields and handwritten reason | Dockets provide only a weak trailing order number and must retain ambiguity for Division 5c review |
-| 2026-09-21 | Added void reconciliation with aligned matched/unmatched rows and ordered CSV export | Operators need to review voided ticket items beside docket explanations without hiding missing or colliding weak-key matches |
-| 2026-09-21 | Added parsed ticket/docket read tables and dedicated CSV exports | Uploaded OCR data must be visible as structured ticket and docket records rather than remaining only in upload responses or SQLite |
-| 2026-09-21 | Enforced ticket/bill pipeline separation and exact hyphenated Ticket ID storage | Ticket screenshots were being misclassified as bill images and losing the second Ticket ID segment |
-| 2026-09-22 | Finalized strict ticket/docket fields, dedicated upload boundaries, read-back verification, and separate table rendering | Uploads must produce immediately queryable structured rows without cross-contamination or raw-text display blobs |
+## Extraction queue and fallback
+- Image uploads are persisted as per-file jobs and return immediately with a batch ID. Jobs progress through `queued`, `processing`, `done`, or `failed`; the frontend polls `/api/upload/jobs/{batch_id}`.
+- A shared process-local request pacer uses `EXTRACTION_MAX_RPM` (default 4) across Gemini docket calls and retries. Local ticket OCR does not consume provider RPM. `EXTRACTION_CONCURRENCY` (default 2, supported 1-8) controls worker count. Set these according to the Gemini project quota.
+- The request pacer is process-local; deployments with multiple API worker processes must keep extraction on one process or add a shared limiter before scaling across processes.
+- Gemini vision is active only for docket extraction (`GEMINI_MODEL`, default `gemini-3.5-flash-lite`, key in `GEMINI_API_KEY`). NVIDIA is not used by the upload workflow. Ticket screenshot OCR uses Tesseract and is audited per file; Gemini output is validated locally against the strict Pydantic docket schema.

@@ -1,26 +1,38 @@
+from pathlib import Path
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
-from app.api.upload import router as upload_router
-from app.api.entries import router as entries_router
-from app.api.export import router as export_router
-from app.api.reconciliation import router as reconciliation_router
-from app.api.void_reconciliation import router as void_reconciliation_router
-from app.api.records import router as records_router
+from fastapi.staticfiles import StaticFiles
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
+
+from app.api.image_upload import router as image_upload_router, start_extraction_workers, stop_extraction_workers
+from app.api.verification import router as verification_router
 from app.storage.db import init_db
 
-app = FastAPI(title="TIL SYSTEM Backend", version="0.1.0")
+app = FastAPI(title="TIL CSV Verification", version="1.0.0")
 init_db()
+app.include_router(verification_router, prefix="/api")
+app.include_router(image_upload_router, prefix="/api")
+app.mount("/api/images/ticket_screenshots", StaticFiles(directory="data/uploads/ticket_screenshots"), name="tickets")
+app.mount("/api/images/dockets", StaticFiles(directory="data/uploads/dockets"), name="dockets")
 
-# Include routers
-app.include_router(upload_router, prefix="/api")
-app.include_router(entries_router, prefix="/api")
-app.include_router(export_router, prefix="/api")
-app.include_router(reconciliation_router, prefix="/api")
-app.include_router(void_reconciliation_router, prefix="/api")
-app.include_router(records_router, prefix="/api")
+
+@app.on_event("startup")
+async def startup_extraction_queue():
+    await start_extraction_workers()
+
+
+@app.on_event("shutdown")
+async def shutdown_extraction_queue():
+    await stop_extraction_workers()
+
 
 @app.get("/")
 async def root():
-    return {"message": "TIL SYSTEM Backend is running"}
+    return {"message": "TIL CSV verification service is running"}
+
 
 @app.get("/health")
 async def health_check():

@@ -1,138 +1,39 @@
-# ARCHITECTURE.md — TIL SYSTEM
+# Architecture — CSV verification
 
-## 1. High-level split
-Backend (this repo) and frontend (teammate's repo) are separate. Backend
-exposes a REST API; frontend consumes it per `frontend_spec.md`.
+FastAPI owns import, extraction, persistence, and all matching. React selects branch/date (Haweli Restaurant Southall, Haweli Restaurant Norbury, or Haweli Ilford Ltd), uploads the CSV and image batches, renders API statuses, and requests refresh after successful uploads. The frontend never performs matching.
 
-## 2. Backend responsibilities (FastAPI)
-- Receive single or bulk image uploads
-- Receive bulk ticket screenshots and merge them into ticket records by Ticket ID
-- Receive bulk discrepancy dockets and preserve printed OCR separately from handwriting
-- Run text extraction on images (OCR with preprocessing + OSD deskew)
-- Parse ticket screenshots and docket images into separate fixed field sets;
-  missing values are null and unknown labels go to `extra_fields`
-- Segment the text into blocks (header / metadata / line items / discrepancy
-  markers / totals / payment) and bind each marker to its line item
-- Persist rows (including the structured `blocks` JSON)
-- Reconcile ticket records against image entries using ticket number as the
-  primary match key and restaurant + date + amount as a fallback only when
-  the numbers are absent or incomparable
-- Capture handwritten reasons as a separate field and assess whether the note
-  plausibly addresses the discrepancy with explicit operator-review evidence
-- Serve the table data to the frontend
-- Generate CSV export
+## Backend modules
+- app/api/verification.py: CRLF-safe CSV import, branch/date row storage, date confirmation, summary, and backend match builder.
+- GET /api/verification/dates lists imported dates and discrepancy-row counts for the selected branch so prior records can be opened by date.
+- app/api/image_upload.py: per-file ticket/docket batches and partial failure reports.
+- app/extraction/ticket_ocr.py: local Tesseract OCR parses ticket screenshot text and line-cleans the item table for a second pass while preserving void cues from original pixels. app/extraction/gemini.py sends docket images to Gemini vision for structured printed and handwritten extraction. app/main.py loads the project-root .env through python-dotenv; GEMINI_API_KEY is required for docket vision.
+- app/storage/db.py: SQLite CSV rows, merged tickets/items, dockets, and per-file extraction audit JSON.
+- app/main.py: API routes and evidence-image static paths.
 
-## 3. Proposed directory structure
+## Storage and matching
+Every imported CSV line is stored in csv_rows keyed by branch and selected date; reimport replaces that branch/date dataset. Image batches retain both extracted branch metadata and their selected-branch association. ticket_records and docket_records retain structured model output; upload_audits keeps raw JSON for each extraction. Matching derives statuses from saved rows and is rebuilt after image uploads and on verification reads. Ticket day is the ID prefix. Exact values and normalized strings gate ticket candidates. Docket order number is compared as an entire trailing ID segment; item/staff disagreement and multiple candidates surface as Needs review. A row needs enough ticket+docket pairs to cover its flagged count/quantity to become Verified.
 
-    til-system-backend/
-    ├── CONTEXT.md
-    ├── mvp_spec.md
-    ├── architecture.md
-    ├── frontend_spec.md
-    ├── rules.md
-    ├── decisions.md
-    ├── session_log.md
-    ├── app/
-    │   ├── main.py                # FastAPI app entrypoint
-    │   ├── api/
-    │   │   ├── upload.py          # POST endpoint: receive image(s)
-    │   │   ├── entries.py         # GET/PATCH endpoints: table rows
-    │   │   └── export.py          # GET endpoint: CSV export
-    │   ├── extraction/
-    │   │   └── ocr.py             # text extraction from image (preprocess + OSD deskew + Tesseract)
-    │   ├── models/
-    │   │   ├── entry.py           # data model for a bill/discrepancy row
-    │   │   └── segmentation.py    # block segmentation + auditable value correction
-    │   ├── storage/
-    │   │   └── db.py              # persistence layer (SQLite for MVP)
-    │   └── core/
-    │       └── config.py
-    ├── data/
-    │   └── uploads/                # stored images
-    └── requirements.txt
+## Data flow
+CSV -> /api/csv -> csv_rows -> /api/verification -> five boxes/details
 
-## 4. Data flow
+ticket image -> local Tesseract OCR -> ticket record + text audit -> automatic verification rebuild -> UI refresh
+docket image -> Gemini vision JSON -> docket record + raw response audit -> automatic verification rebuild -> UI refresh
 
-    [image upload] -> [FastAPI /upload or /upload/bulk] -> [OCR extraction (preprocess + Tesseract)]
-        -> [parse_extracted_text (fields + blocks/segment_text)]
-        -> [determine_status (precedence; low-confidence marker -> needs_review)]
-        -> [structured row + blocks JSON stored in DB]
-        -> [/entries returns table data] -> [frontend renders table]
-        -> [/export returns CSV of current table/filtered view]
+No slip upload, Excel parser, client Process action, generic bill pipeline, or old reconciliation pipeline remains in the MVP.
 
-      Bulk image uploads are processed synchronously, one image at a time through
-      the same extraction/parsing/persistence pipeline as `/upload`. The bulk route
-      accepts up to 30 images and isolates exceptions per image, returning stored
-      successes alongside filename/reason failures. No background job or polling is
-      required for the current MVP contract; the frontend can refresh `/entries`
-      after the request completes.
+## Evidence merge and review details
+Ticket screenshots are deduplicated by SHA-256 and merged by full ticket ID. Visible item sequences are joined only across matching suffix/prefix overlap; non-orderable fragments carry a possible-gap review flag. Conflicting repeated totals and non-void item-sum discrepancies appear as ticket review flags. Invalid IDs or branch/day mismatches are held for operator assignment/confirmation.
 
-      Ticket screenshot batches use `/api/upload/tickets`, OCR each screenshot,
-      normalize its Ticket ID, and upsert one SQLite `ticket_records` row. The
-      row stores flexible ticket fields, `extra_fields`, deduplicated item rows,
-      raw OCR text, and screenshot filenames. Screenshots are saved under
-      `data/uploads/ticket_screenshots/`; item merge keys are normalized item
-      name + quantity + unit price, and void rows retain `is_void: true`.
-      The generic `/api/upload` and `/api/upload/bulk` paths inspect OCR before
-      accepting an image; a full Ticket ID plus ticket-screen labels is routed
-      into `ticket_records` and `ticket_screenshots` instead of `entries`.
-      Unrecognized non-ticket images are rejected from the generic path and
-      must use the dedicated docket endpoint. Ticket IDs remain one
-      hyphenated string such as `260920-143`.
+Docket records retain all image filenames, item lines, and complementary views. Candidate dockets with the same branch/date/order/time and compatible marked-item sets merge; contradictory field readings remain in field_conflicts and set Needs review. Distinct marked items or times remain separate docket records. Gemini raw JSON is stored in upload_audits per docket file; preprocessing applies EXIF orientation, bounded resize, and contrast/brightness adjustment, with one retry after strict schema validation failure. Ticket screenshots use local Tesseract `image_to_data` OCR so item rows retain bounding boxes. The original pass supplies mapped fields and item order; horizontal-stroke repair produces a corroborating pass for a literal `(Void)` suffix. Original pixels estimate each row background from bright pixels and compare its red excess with the adjacent row, avoiding a fixed RGB target. A row is void when tint or strikethrough fires; strikethrough without tint receives a low-confidence review flag. Item modifiers stay attached to their row, and all three signals are stored per item for review.
 
-      Docket batches use `/api/upload/dockets`, save images under
-      `data/uploads/dockets/`, and create one `docket_records` row per image.
-      The parser stores `docket_order_no` as a weak trailing-order key, docket
-      date/time, item, printed discrepancy type, separate `handwritten_reason`,
-      printed/raw OCR, and review flags. Multiple detected order numbers cause
-      manual review; the endpoint never invents a full Ticket ID.
+The Gemini JSON schema is sanitized to omit unsupported `additionalProperties` and `default` keywords. At startup, previously failed provider-less docket jobs are requeued once through the active Gemini path; failures record the provider to prevent restart loops. Docket views from the same image and order merge as complementary views.
 
-      Void reconciliation reads `ticket_records.items` where `is_void` is true
-      and matches each item to `docket_records.docket_order_no` using the
-      trailing Ticket ID digits. A unique date match resolves a collision;
-      unresolved collisions retain every candidate and become `needs_review`.
-      The builder sorts `matched`, then `needs_review`, then `unmatched`, adds
-      `row_position`, and is shared by both the JSON and CSV endpoints.
+Gemini docket extraction uses structured JSON at temperature zero and retries transient 429/503 errors with provider delay guidance. Ticket OCR is local and does not use provider retries.
 
-      `/api/tickets` returns one merged ticket row with prominent `ticket_id`,
-      `uploaded_at` (latest screenshot upload/merge time), and its
-      normalized `items[]` from the `ticket_items` child table. The frontend
-      keeps the dataset collapsed until Show data and renders an expandable
-      item sub-table. `/api/dockets` returns order_number, date, time, item,
-      discrepancy_type, and description. Upload success is
-      returned only after the inserted row is read back from its dedicated
-      table.
+## Background extraction
+POST upload endpoints save each image and create a persisted `extraction_jobs` row, then return a `batch_id`; startup resumes queued or interrupted jobs. Configured workers invoke extraction off the event loop. Ticket jobs run local Tesseract OCR and do not consume provider RPM. Docket jobs call Gemini; a process-local monotonic request pacer spaces every request and retry according to `EXTRACTION_MAX_RPM`. Worker count comes from `EXTRACTION_CONCURRENCY`. Docket raw Gemini responses are audited and validated against the strict Pydantic schema before storage. Ticket original/cleaned OCR text and structured results are audited per file. `/api/upload/jobs/{batch_id}` exposes per-file progress and errors. Multi-process deployments need a distributed limiter for a provider-wide RPM guarantee.
 
-      The generic entries dataset is not used by ticket/docket ingestion or
-      the active UI. The two dedicated datasets are the only parsed record
-      tables shown to operators.
+Install the Tesseract 5 Windows engine and the Python dependencies in `requirements.txt`; the app searches PATH and the standard `C:\Program Files\Tesseract-OCR\tesseract.exe` location. Set `TESSERACT_CMD` to the executable path if installed elsewhere. Docket extraction uses `GEMINI_MODEL=gemini-3.5-flash-lite` and `GEMINI_API_KEY`. NVIDIA is not used by either upload path.
 
-## 5. Division-to-code mapping
-| Division | Code location |
-|---|---|
-| 1. Image input + extraction | `app/api/upload.py`, `app/extraction/ocr.py` |
-| 2. Table / discrepancy data | `app/models/entry.py`, `app/api/entries.py`, `app/storage/db.py` |
-| 3. CSV export | `app/api/export.py` |
-| 4c. Ticket reconciliation | `app/models/reconciliation.py`, `app/api/reconciliation.py` |
-| Ticket screenshot input | `app/models/ticket.py`, `app/api/upload.py`, `app/storage/db.py` |
-| Docket input | `app/models/docket.py`, `app/api/upload.py`, `app/storage/db.py` |
-| Void reconciliation | `app/api/void_reconciliation.py`, `app/storage/db.py` |
-| Parsed ticket/docket reads and CSVs | `app/api/records.py`, `app/storage/db.py` |
 
-## 6. Open decisions (resolve and move into decisions.md)
-- How ticket number / restaurant are identified from extracted text
-  (regex? fixed template per restaurant? manual entry fallback?)
-
-## 7. Resolved decisions
-- OCR engine/service choice: Selected Tesseract OCR (recorded in decisions.md)
-- Storage layer: Selected SQLite for MVP (simple, file-based, sufficient)
-- Text parsing approach: Selected regex/keyword matching (extract ticket # and discrepancy type)
-- CSV export functionality: Selected GET /export endpoint with filtering support (restaurant, ticket_number)
-- CSV image representation: Selected to export stored image filename/path instead of thumbnail
-- Entry model: Added extra_fields (dict) for capturing unexpected bill fields, image_filename for CSV export reference
-- Status values: Expanded to matched, needs_description, needs_ticket_number, needs_restaurant, needs_discrepancy_type, needs_review
-- Parsing strategy: Retained regex/rule-based over LLM; multiple patterns with graceful degradation for schema flexibility
-- OCR preprocessing: grayscale -> 2x LANCZOS upscale (<1400px) -> autocontrast(cutoff=1) -> OSD deskew (rotate only at confidence >= 5.0); Tesseract `--oem 3 --psm 6`
-- Block segmentation: `app/models/segmentation.py` splits the OCR blob into header / metadata / line_items / discrepancies / totals / payment; every value fix is recorded in `corrections` (auditable)
-- Discrepancy association: marker binds to nearest preceding item; high confidence iff gap <= 2 lines and marker amount matches line_total; otherwise low -> status `needs_review`
-- `blocks` column: additive `blocks` JSON column on entries (deserialized by `entries.py`); raw `extracted_text` kept for audit; `/upload` response `parsed_data` stays at the original 5 fields
+Ticket item segment overlap fingerprints include name, price, quantity, total, modifier, and void state. Reprocessing the same screenshot replaces that source segment before running the existing overlap merge; repeated rows within one screenshot remain intact.
