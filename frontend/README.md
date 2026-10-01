@@ -1,4 +1,4 @@
-# TIL CSV Verification UI
+# Haveli Ticket Management
 
 Select a restaurant branch and date, upload one till CSV, review the five summary boxes, then upload ticket screenshots and docket photos. The UI refreshes verification after each saved image batch; matching is provided only by the backend.
 

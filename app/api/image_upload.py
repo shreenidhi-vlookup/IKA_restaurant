@@ -5,13 +5,14 @@ import logging
 import os
 import re
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.api.verification import build_verification
 from app.extraction.gemini import VisionExtractionError, extract_image as extract_gemini_image
-from app.extraction.ticket_ocr import extract_ticket as extract_ticket_ocr
+from app.extraction.ticket_ocr import classify_document, extract_ticket as extract_ticket_ocr
 from app.storage.db import (
     create_docket_record,
     get_db_connection,
@@ -32,6 +33,12 @@ TICKET_ID_RE = re.compile(r"^\d{6}-\d+$")
 log = logging.getLogger(__name__)
 _job_queue: asyncio.Queue[str] | None = None
 _worker_tasks: list[asyncio.Task] = []
+_retention_task: asyncio.Task | None = None
+RETENTION_INTERVAL_SECONDS = 60 * 60
+
+
+class ClassificationRejected(ValueError):
+    pass
 
 
 def _norm(value: Any) -> str:
@@ -55,6 +62,7 @@ def _duplicate(kind: str, file_hash: str):
         jobs = conn.execute("SELECT status,provider FROM extraction_jobs WHERE kind=? AND stored_filename=?", (kind, filename)).fetchall()
         active = any(row['status'] in {'queued', 'processing'} for row in jobs)
         extracted = any(row['status'] == 'done' and row['provider'] for row in jobs)
+        failed = any(row['status'] == 'failed' for row in jobs)
         referenced = False
         if kind == 'ticket':
             records = conn.execute("SELECT screenshot_filenames FROM ticket_records").fetchall()
@@ -65,7 +73,7 @@ def _duplicate(kind: str, file_hash: str):
             referenced = any(row['image_filename'] == filename or filename in json.loads(row['image_filenames'] or '[]') for row in records)
         if not path_exists or not (active or extracted or referenced):
             conn.execute("DELETE FROM upload_hashes WHERE kind=? AND file_hash=?", (kind, file_hash))
-            if path_exists and not referenced and not active:
+            if path_exists and not referenced and not active and not failed:
                 os.remove(os.path.join(directory, filename))
             conn.commit()
             return None
@@ -74,7 +82,7 @@ def _duplicate(kind: str, file_hash: str):
 
 def _remember_hash(kind: str, file_hash: str, filename: str, record_id: int | None = None):
     with get_db_connection() as conn:
-        conn.execute("INSERT OR IGNORE INTO upload_hashes(kind,file_hash,filename,record_id) VALUES(?,?,?,?)", (kind, file_hash, filename, record_id))
+        conn.execute("INSERT INTO upload_hashes(kind,file_hash,filename,record_id) VALUES(?,?,?,?) ON CONFLICT DO NOTHING", (kind, file_hash, filename, record_id))
         conn.commit()
 
 
@@ -108,6 +116,73 @@ def _remove_image_file(kind: str, filename: str):
     path = os.path.join(directory, filename)
     if os.path.isfile(path):
         os.remove(path)
+
+
+def _retention_exempt(kind: str, filename: str) -> bool:
+    """Keep failed or unresolved evidence available for operator review."""
+    with get_db_connection() as conn:
+        if conn.execute("SELECT 1 FROM extraction_jobs WHERE kind=? AND stored_filename=? AND status IN ('failed','queued','processing') LIMIT 1", (kind, filename)).fetchone():
+            return True
+        if kind == 'ticket':
+            if conn.execute("SELECT 1 FROM unassigned_screenshots WHERE filename=? LIMIT 1", (filename,)).fetchone():
+                return True
+            records = conn.execute("SELECT screenshot_filenames,review_flags,items FROM ticket_records").fetchall()
+            for record in records:
+                if filename in json.loads(record['screenshot_filenames'] or '[]'):
+                    if json.loads(record['review_flags'] or '[]') or not json.loads(record['items'] or '[]'):
+                        return True
+        else:
+            records = conn.execute("SELECT image_filename,image_filenames,item_lines,review_required,partial_fields,field_conflicts FROM docket_records").fetchall()
+            for record in records:
+                names = json.loads(record['image_filenames'] or '[]')
+                if filename in names or record['image_filename'] == filename:
+                    lines = json.loads(record['item_lines'] or '[]')
+                    if (record['review_required'] or json.loads(record['partial_fields'] or '[]')
+                            or json.loads(record['field_conflicts'] or '[]') or not lines):
+                        return True
+    return False
+
+
+def sweep_expired_images(now=None) -> list[dict[str, str]]:
+    """Delete resolved images after 24 hours from the job's upload timestamp."""
+    current = now or datetime.now(timezone.utc)
+    with get_db_connection() as conn:
+        rows = conn.execute("""SELECT kind,stored_filename,MIN(created_at) AS uploaded_at
+            FROM extraction_jobs WHERE stored_filename<>'' AND status IN ('done','failed')
+            GROUP BY kind,stored_filename""").fetchall()
+    deleted = []
+    for row in rows:
+        kind, filename, uploaded_at = row['kind'], row['stored_filename'], row['uploaded_at']
+        directory = TICKET_DIR if kind == 'ticket' else DOCKET_DIR
+        path = os.path.join(directory, filename)
+        if not os.path.isfile(path) or _retention_exempt(kind, filename):
+            continue
+        try:
+            uploaded = datetime.fromisoformat(uploaded_at.replace('Z', '+00:00'))
+            if uploaded.tzinfo is None:
+                uploaded = uploaded.replace(tzinfo=timezone.utc)
+        except (AttributeError, ValueError):
+            continue
+        if (current - uploaded).total_seconds() < 24 * 60 * 60:
+            continue
+        os.remove(path)
+        deleted_at = current.astimezone(timezone.utc).isoformat()
+        event = {'filename': filename, 'kind': kind, 'uploaded_at': uploaded_at, 'deleted_at': deleted_at}
+        _add_audit('image:auto_delete', filename, json.dumps(event, ensure_ascii=False))
+        log.info('Auto-deleted resolved image %s uploaded at %s, deleted at %s', filename, uploaded_at, deleted_at)
+        deleted.append(event)
+    return deleted
+
+
+async def _retention_sweeper():
+    while True:
+        try:
+            await asyncio.to_thread(sweep_expired_images)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception('Image retention sweep failed')
+        await asyncio.sleep(RETENTION_INTERVAL_SECONDS)
 
 
 def _ticket_storage(parsed: dict[str, Any], filename: str, file_hash: str, branch: str, raw_text: str = ""):
@@ -154,8 +229,9 @@ def _ticket_texts(raw: str) -> list[str]:
     except (TypeError, json.JSONDecodeError):
         return [raw]
     if isinstance(decoded, dict):
+        # An OCR audit wrapper with no recognised text means nothing was read.
         texts = [decoded.get("original_text"), decoded.get("line_cleaned_text")]
-        return list(dict.fromkeys(text for text in texts if isinstance(text, str) and text.strip())) or [raw]
+        return list(dict.fromkeys(text for text in texts if isinstance(text, str) and text.strip()))
     return [raw]
 
 
@@ -176,7 +252,10 @@ def _extra_fields_dict(value: Any) -> dict[str, Any]:
 
 def _save_unassigned(filename: str, file_hash: str, branch: str, selected_date: str, parsed: dict[str, Any], issue: str):
     with get_db_connection() as conn:
-        conn.execute("INSERT OR REPLACE INTO unassigned_screenshots(filename,file_hash,selected_branch,selected_date,parsed_json,issue) VALUES(?,?,?,?,?,?)", (filename, file_hash, branch, selected_date, json.dumps(parsed, ensure_ascii=False), issue))
+        conn.execute("""INSERT INTO unassigned_screenshots(filename,file_hash,selected_branch,selected_date,parsed_json,issue) VALUES(?,?,?,?,?,?)
+            ON CONFLICT(filename) DO UPDATE SET file_hash=excluded.file_hash,selected_branch=excluded.selected_branch,
+            selected_date=excluded.selected_date,parsed_json=excluded.parsed_json,issue=excluded.issue""",
+                     (filename, file_hash, branch, selected_date, json.dumps(parsed, ensure_ascii=False), issue))
         conn.commit()
     _remember_hash("ticket", file_hash, filename)
 
@@ -197,6 +276,15 @@ def _save_extracted_job(job: dict[str, Any]):
     kind = job['kind']
     directory = TICKET_DIR if kind == 'ticket' else DOCKET_DIR
     path = os.path.join(directory, job['stored_filename'])
+    detected, reason = classify_document(path)
+    if detected == 'uncertain' or detected != kind:
+        message = (f'This looks like a {detected}, not a {kind} image' if detected != 'uncertain'
+                   else f'Image held for operator review: document type is uncertain ({reason})')
+        _add_audit(f'{kind}:classification_rejected', job['original_filename'], json.dumps({
+            'filename': job['original_filename'], 'reason': reason, 'detected_type': detected,
+            'expected_type': kind, 'message': message,
+        }, ensure_ascii=False))
+        raise ClassificationRejected(message)
     if kind == 'ticket':
         parsed, raw = extract_ticket_ocr(path)
         provider = 'tesseract_ocr'
@@ -282,19 +370,21 @@ async def _worker():
                 provider, message = await asyncio.to_thread(_save_extracted_job, job)
                 _job_update(job_id, 'done', message, provider=provider)
             except Exception as exc:
-                log.exception('Vision extraction failed for %s', job['original_filename'])
-                referenced = _image_is_referenced(job['kind'], job['stored_filename'])
-                if not referenced:
-                    _forget_hash(job['kind'], job['file_hash'])
-                    _remove_image_file(job['kind'], job['stored_filename'])
+                if isinstance(exc, ClassificationRejected):
+                    log.warning('Image held/rejected by document classification: %s: %s', job['original_filename'], exc)
+                else:
+                    log.exception('Vision extraction failed for %s', job['original_filename'])
+                held = isinstance(exc, ClassificationRejected)
+                if held:
+                    _remember_hash(job['kind'], job['file_hash'], job['stored_filename'])
                 failed_provider = 'gemini' if job['kind'] == 'docket' else 'tesseract_ocr'
-                _job_update(job_id, 'failed', 'Extraction failed', provider=failed_provider, error=str(exc))
+                _job_update(job_id, 'failed', 'Held for review' if held else 'Extraction failed', provider=failed_provider, error=str(exc))
         finally:
             _job_queue.task_done()
 
 
 async def start_extraction_workers():
-    global _job_queue, _worker_tasks
+    global _job_queue, _worker_tasks, _retention_task
     if _job_queue is not None:
         return
     _job_queue = asyncio.Queue()
@@ -307,13 +397,19 @@ async def start_extraction_workers():
         conn.execute("""UPDATE extraction_jobs SET status='queued',message='Retrying failed docket with Gemini',error=NULL,updated_at=CURRENT_TIMESTAMP
             WHERE kind='docket' AND status='failed' AND provider IS NULL AND stored_filename<>''""")
         queued = conn.execute("SELECT job_id FROM extraction_jobs WHERE status='queued' ORDER BY created_at").fetchall()
+        conn.commit()
     for row in queued:
         _job_queue.put_nowait(row['job_id'])
     _worker_tasks = [asyncio.create_task(_worker(), name=f'extraction-worker-{i + 1}') for i in range(count)]
+    _retention_task = asyncio.create_task(_retention_sweeper(), name='image-retention-sweeper')
 
 
 async def stop_extraction_workers():
-    global _job_queue, _worker_tasks
+    global _job_queue, _worker_tasks, _retention_task
+    if _retention_task:
+        _retention_task.cancel()
+        await asyncio.gather(_retention_task, return_exceptions=True)
+        _retention_task = None
     for task in _worker_tasks:
         task.cancel()
     if _worker_tasks:
@@ -355,7 +451,7 @@ async def _batch(files: list[UploadFile], kind: str, branch: str, selected_date:
             conn.execute('INSERT INTO extraction_jobs(job_id,batch_id,kind,original_filename,stored_filename,file_hash,branch,selected_date,status,message) VALUES(?,?,?,?,?,?,?,?,?,?)',
                          (job_id, batch_id, kind, original, stored, file_hash, branch, selected_date, status, message))
             if status == 'queued':
-                conn.execute('INSERT OR IGNORE INTO upload_hashes(kind,file_hash,filename) VALUES(?,?,?)', (kind, file_hash, stored))
+                conn.execute('INSERT INTO upload_hashes(kind,file_hash,filename) VALUES(?,?,?) ON CONFLICT DO NOTHING', (kind, file_hash, stored))
             conn.commit()
         if status == 'queued':
             assert _job_queue is not None
@@ -484,6 +580,7 @@ def delete_upload(kind: str, filename: str):
 
         conn.execute('DELETE FROM upload_hashes WHERE kind=? AND filename=?', (kind, filename))
         conn.execute('DELETE FROM upload_audits WHERE kind=? AND filename=?', (audit_kind, filename))
+        conn.execute('INSERT INTO upload_audits(kind,filename,raw_json) VALUES(?,?,?)', ('image:manual_delete', filename, json.dumps({'filename': filename, 'kind': kind, 'deleted_at': datetime.now(timezone.utc).isoformat()}, ensure_ascii=False)))
         conn.execute('DELETE FROM extraction_jobs WHERE kind=? AND stored_filename=?', (kind, filename))
         conn.commit()
 

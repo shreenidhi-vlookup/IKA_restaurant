@@ -3,20 +3,14 @@ from difflib import SequenceMatcher
 import io
 import json
 import re
-import sqlite3
 from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
+from app.storage.db import get_db_connection
+
 router = APIRouter()
-DB = "./data/til_system.db"
-
-
-def _db():
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 def _norm(value: Any) -> str:
@@ -114,15 +108,16 @@ async def upload_csv(branch: str = Form(...), selected_date: str = Form(...), fi
         raise HTTPException(400, "CSV contains no item rows")
     headers = set(parsed[0])
     promo_column = next((h for h in headers if h.casefold() in {"promotion", "promotions", "discount", "discounts"}), None)
-    conn = _db()
-    with conn:
+    with get_db_connection() as conn:
         conn.execute("DELETE FROM csv_rows WHERE branch=? AND selected_date=?", (branch, selected_date))
         for row in parsed:
             flags = {"void": _num(row.get("Void")) or 0, "cancel": _num(row.get("Cancel")) or 0, "promotion": _num(row.get(promo_column)) or 0 if promo_column else 0}
             conn.execute("INSERT INTO csv_rows(branch,selected_date,row_date,product,quantity,user_name,department,till,category,group_name,sales_value,void_count,cancel_count,promotion_count,raw_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
                 branch, selected_date, row.get("Date"), row.get("Product Name"), _num(row.get("Quantity")) or 0, row.get("User"), row.get("Department"), row.get("Till"), row.get("Category"), row.get("Group"), _num(row.get("Sales Value")) or 0, flags["void"], flags["cancel"], flags["promotion"], json.dumps(row, ensure_ascii=False)))
-        conn.execute("INSERT OR REPLACE INTO csv_imports(branch,selected_date,filename,promotions_in_file) VALUES(?,?,?,?)", (branch, selected_date, file.filename, int(bool(promo_column))))
-    conn.close()
+        conn.execute("""INSERT INTO csv_imports(branch,selected_date,filename,promotions_in_file) VALUES(?,?,?,?)
+            ON CONFLICT(branch,selected_date) DO UPDATE SET filename=excluded.filename,promotions_in_file=excluded.promotions_in_file""",
+                     (branch, selected_date, file.filename, int(bool(promo_column))))
+        conn.commit()
     return {"saved_rows": len(parsed), "branch": branch, "date": selected_date, "csv_dates": sorted({r.get("Date") for r in parsed if r.get("Date")}), "promotions_in_file": bool(promo_column)}
 
 
@@ -154,12 +149,11 @@ def _ticket_candidates(row, tickets, branch, learned_suffixes):
 
 
 def build_verification(branch: str, selected_date: str):
-    conn = _db()
-    rows = [dict(r) for r in conn.execute("SELECT * FROM csv_rows WHERE branch=? AND selected_date=? ORDER BY id", (branch, selected_date))]
-    import_record = conn.execute("SELECT promotions_in_file FROM csv_imports WHERE branch=? AND selected_date=?", (branch, selected_date)).fetchone()
-    tickets = [dict(r) for r in conn.execute("SELECT * FROM ticket_records")]
-    dockets = [dict(r) for r in conn.execute("SELECT * FROM docket_records WHERE selected_branch=?", (branch,))]
-    conn.close()
+    with get_db_connection() as conn:
+        rows = [dict(r) for r in conn.execute("SELECT * FROM csv_rows WHERE branch=? AND selected_date=? ORDER BY id", (branch, selected_date))]
+        import_record = conn.execute("SELECT promotions_in_file FROM csv_imports WHERE branch=? AND selected_date=?", (branch, selected_date)).fetchone()
+        tickets = [dict(r) for r in conn.execute("SELECT * FROM ticket_records")]
+        dockets = [dict(r) for r in conn.execute("SELECT * FROM docket_records WHERE selected_branch=?", (branch,))]
     names = [r.get("product") for r in rows]
     for ticket in tickets:
         try:
@@ -277,13 +271,12 @@ def get_verification(branch: str, selected_date: str):
 
 @router.get("/verification/dates")
 def get_verification_dates(branch: str):
-    conn = _db()
-    dates = conn.execute("""
-        SELECT i.selected_date AS date, i.filename, COUNT(r.id) AS item_rows,
-        SUM(CASE WHEN COALESCE(r.void_count,0)>0 OR COALESCE(r.cancel_count,0)>0 OR COALESCE(r.promotion_count,0)>0 THEN 1 ELSE 0 END) AS flagged_rows
-        FROM csv_imports i LEFT JOIN csv_rows r ON r.branch=i.branch AND r.selected_date=i.selected_date
-        WHERE i.branch=? GROUP BY i.branch, i.selected_date, i.filename
-        ORDER BY i.selected_date DESC
-    """, (branch,)).fetchall()
-    conn.close()
+    with get_db_connection() as conn:
+        dates = conn.execute("""
+            SELECT i.selected_date AS date, i.filename, COUNT(r.id) AS item_rows,
+            SUM(CASE WHEN COALESCE(r.void_count,0)>0 OR COALESCE(r.cancel_count,0)>0 OR COALESCE(r.promotion_count,0)>0 THEN 1 ELSE 0 END) AS flagged_rows
+            FROM csv_imports i LEFT JOIN csv_rows r ON r.branch=i.branch AND r.selected_date=i.selected_date
+            WHERE i.branch=? GROUP BY i.branch, i.selected_date, i.filename
+            ORDER BY i.selected_date DESC
+        """, (branch,)).fetchall()
     return {"branch": branch, "dates": [{**dict(row), "flagged_rows": row["flagged_rows"] or 0} for row in dates]}

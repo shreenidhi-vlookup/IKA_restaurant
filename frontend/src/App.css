@@ -5,6 +5,19 @@
 @media(max-width:850px){.app-shell{width:calc(100% - 36px)}.summary-grid{grid-template-columns:repeat(3,1fr)}.selection-card,.csv-card{align-items:flex-start;flex-direction:column}.selectors{width:100%}.selectors label{flex:1}}
 @media(max-width:560px){.app-shell{width:calc(100% - 24px);margin-top:12px}.summary-grid{grid-template-columns:repeat(2,1fr)}.upload-grid,.evidence-columns{grid-template-columns:1fr}.csv-row{grid-template-columns:1fr auto}.csv-row .status-pill{grid-column:1/-1}.selectors{flex-direction:column;width:100%}.selectors label{min-width:0}.warning{align-items:flex-start;flex-direction:column}}
 
+/* Keep wide content inside the page instead of shifting the whole viewport. */
+html,body,#root{width:100%;min-width:0}
+body{overflow-x:hidden}
+.app-shell{width:min(1160px,calc(100% - 48px));max-width:100%;min-width:0}
+.topbar,main,.selection-card,.csv-card,.summary-section,.evidence-section,.ticket-data-section{min-width:0}
+.topbar>div:last-child,.selection-card>div,.csv-card>div{min-width:0}
+.selection-card,.csv-card{flex-wrap:wrap}
+.selectors{min-width:0;max-width:100%;flex-wrap:wrap}
+.selectors label{min-width:min(190px,100%)}
+.csv-card>div{overflow-wrap:anywhere}
+@media(max-width:850px){.app-shell{width:calc(100% - 36px)}.selectors{width:100%}}
+@media(max-width:560px){.app-shell{width:calc(100% - 24px)}.selectors{flex-direction:column}.selectors label{width:100%;min-width:0}}
+
 .history-section{margin:0 0 15px}.history-button,.history-open-button{padding:9px 13px;border:1px solid #d9b3a5;border-radius:5px;color:#9d482f;background:#fffefa;cursor:pointer;font:500 10px 'DM Mono',monospace;letter-spacing:.04em;text-transform:uppercase}.history-button:disabled{opacity:.5;cursor:not-allowed}.history-panel{margin-top:10px;padding:17px 19px;border:1px solid var(--line);border-radius:9px;background:var(--surface);box-shadow:var(--shadow)}.history-heading,.history-row{display:flex;align-items:center;justify-content:space-between;gap:12px}.history-heading{margin-bottom:8px}.history-heading h3{margin:5px 0;color:#17233d;font:600 15px 'DM Sans',sans-serif}.history-current{color:var(--muted);font:10px 'DM Mono',monospace}.history-row{padding:11px 0;border-top:1px solid #ecebe4}.history-row strong{font:500 12px 'DM Mono',monospace;color:var(--ink)}.history-row small{display:block;margin-top:4px;color:var(--muted);font-size:10px}
 .thumbnail-row{display:flex;flex-wrap:wrap;gap:8px}.thumbnail-row .evidence-thumb{max-width:min(100%,280px);max-height:260px;margin:8px 0}.unassigned-section{margin:18px 0;padding:18px;border:1px solid #ead49d;border-radius:9px;background:#fffaf0}.unassigned-section h2{margin:0 0 8px;color:#71520a;font:600 16px 'DM Sans',sans-serif}
 .file-progress{display:grid;width:100%;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 8px;padding:8px 0;border-top:1px solid var(--line);font-size:10px}.file-progress>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.file-progress small{grid-column:1/-1;color:var(--muted);overflow-wrap:anywhere}.status-pill.queued{border-color:#c9d4e4;color:#425b7e;background:#eef3fb}.status-pill.processing{border-color:#e3d197;color:#806313;background:#fff8df}.status-pill.failed{border-color:#e7b9a6;color:#ad4934;background:#fff0ed}
@@ -14,3 +27,77 @@
 .ticket-data-section{margin-top:27px;padding:18px;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:var(--shadow)}.data-table-scroll{width:100%;overflow:auto;border:1px solid var(--line);border-radius:7px;background:#fff}.ticket-data-table,.ticket-items-table{width:100%;border-collapse:collapse;text-align:left;font-size:11px}.ticket-data-table{min-width:1450px}.ticket-items-table{min-width:850px}.ticket-data-table th,.ticket-items-table th{padding:10px 11px;color:#536953;background:#f5f7f2;font:500 9px 'DM Mono',monospace;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}.ticket-data-table td,.ticket-items-table td{padding:10px 11px;border-top:1px solid #ecebe4;color:var(--ink);vertical-align:top}.ticket-data-table tbody tr:hover,.ticket-items-table tbody tr:hover{background:#fffaf7}.ticket-data-table details summary{color:#9d482f;cursor:pointer;font:500 10px 'DM Mono',monospace;white-space:nowrap}.nested-data-scroll{min-width:600px;margin-top:9px}.data-void-row{background:#fff2eb}.data-void-row td:first-child{border-left:2px solid var(--orange)}.data-review-note{display:block;margin-top:4px;color:#916416;font-size:9px}.entry-count{display:inline-block;margin-left:5px;padding:3px 7px;border:1px solid var(--line);border-radius:10px;color:var(--sage);font:500 10px 'DM Mono',monospace;vertical-align:middle}
 .summary-box{position:relative;padding:0;overflow:hidden}.summary-select{display:block;width:100%;height:100%;padding:16px 45px 16px 16px;text-align:left;border:0;color:var(--ink);background:transparent;cursor:pointer}.summary-select strong{display:block;margin:11px 0 7px;color:#17233d;font:700 18px 'DM Sans',sans-serif}.summary-select small{color:var(--muted);font-size:10px;line-height:1.45}.copy-button{padding:6px 8px;border:1px solid #d9b3a5;border-radius:4px;color:#9d482f;background:#fffefa;cursor:pointer;font:500 9px 'DM Mono',monospace;text-transform:uppercase;white-space:nowrap}.copy-button:hover{border-color:var(--orange);background:#fff6f1}.box-copy{position:absolute;top:8px;right:8px;z-index:1}.modal-actions{display:flex;align-items:center;gap:8px}.upload-list-section{margin-top:22px}.uploaded-image-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:11px}.uploaded-image-card{display:grid;grid-template-columns:76px minmax(0,1fr) auto;align-items:center;gap:10px;padding:9px;border:1px solid var(--line);border-radius:8px;background:#fffefa}.uploaded-image-card img{width:76px;height:64px;object-fit:cover;border:1px solid var(--line);border-radius:5px;background:#f6f4ed}.uploaded-image-info{min-width:0}.uploaded-image-info strong,.uploaded-image-info small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.uploaded-image-info strong{color:#17233d;font-size:11px}.uploaded-image-info small{margin-top:5px;color:var(--muted);font-size:9px}.delete-upload-button{padding:6px 8px;border:1px solid #e7b9a6;border-radius:4px;color:#ad4934;background:#fff6f1;cursor:pointer;font:500 9px 'DM Mono',monospace;text-transform:uppercase}.delete-upload-button:disabled{opacity:.45;cursor:not-allowed}
 .uploaded-count-button{padding:0;border:0;color:#536953;background:transparent;cursor:pointer;font:500 11px 'DM Mono',monospace;text-decoration:underline;text-underline-offset:3px}.uploaded-count-button:disabled{opacity:.5;cursor:not-allowed}.upload-manager-modal{width:min(1100px,100%)}.upload-preview-button{padding:0;border:0;background:transparent;cursor:zoom-in}.replace-upload-button{position:relative;display:inline-flex;margin-top:7px;padding:5px 7px;border:1px solid #d9e1d8;border-radius:4px;color:#536953;background:#f8fbf7;cursor:pointer;font:500 9px 'DM Mono',monospace;text-transform:uppercase}.replace-upload-button input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}.manager-preview{display:grid;gap:10px;margin-top:16px;padding:12px;border:1px solid var(--line);border-radius:7px;background:#fff}.manager-preview strong{font-size:12px}.manager-preview img{max-width:100%;max-height:65vh;object-fit:contain;justify-self:center}.docket-data-table{min-width:1550px}
+.file-button.secondary:hover{border-color:var(--sage);color:var(--sage);background:var(--sage-soft)}
+.file-button.secondary:active{transform:translateY(1px);box-shadow:inset 0 2px 4px rgba(32,34,31,.12)}
+.evidence-upload.is-dragover{border:2px solid var(--orange);background:var(--orange-soft);box-shadow:0 8px 22px rgba(216,94,54,.12)}
+.drop-hint{color:var(--sage);font:500 10px 'DM Mono',monospace}
+.upload-mismatch{display:block;margin-top:6px;padding:8px 10px;border:1px solid #e7b9a6;border-radius:5px;color:#ad4934;background:var(--orange-soft);font-size:10px}
+
+/* --- UI consistency pass --- */
+/* Pin the light scheme so platform form/button surfaces (near-black in a dark OS)
+   can never show through, and drop the UA button appearance that paints under
+   background:transparent. This is the root cause of the black row overlay. */
+html{color-scheme:light}
+button{appearance:none;-webkit-appearance:none}
+
+/* one reusable spinner; currentColor makes it adopt the surrounding text colour */
+.spinner{display:inline-block;width:11px;height:11px;margin-right:7px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;vertical-align:-1px;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.spinner{animation-duration:1.8s}}
+
+/* consistent hover/active across every remaining control, existing tokens only */
+.selectors select:hover,.selectors input:hover{border-color:var(--orange)}
+.file-button:not(.secondary):hover{box-shadow:0 6px 16px rgba(216,94,54,.2)}
+.file-button:active{transform:translateY(1px);box-shadow:inset 0 2px 4px rgba(32,34,31,.12)}
+.history-button:hover,.history-open-button:hover{border-color:var(--orange);background:#fff6f1}
+.history-button:active,.history-open-button:active,.quiet-button:active,.copy-button:active,.delete-upload-button:active,.replace-upload-button:active,.uploaded-count-button:active{transform:translateY(1px)}
+.quiet-button:hover{border-color:#d9b3a5;background:#fff6f1}
+.delete-upload-button:hover{border-color:#ad4934;background:#fff0ed}
+.replace-upload-button:hover{border-color:var(--sage);color:var(--sage);background:var(--sage-soft)}
+
+/* disabled stays muted but is never a dead not-allowed cursor */
+.file-button:has(input:disabled){cursor:help}
+.history-button:disabled,.uploaded-count-button:disabled{cursor:help}
+.gated-control{display:inline-flex;flex-direction:column;align-items:flex-start;gap:5px}
+.gated-control :disabled{pointer-events:none}
+.control-hint{color:#916416;font:500 10px 'DM Mono',monospace}
+
+/* View / manage is a real button matching the existing secondary button pattern */
+.uploaded-count-button{padding:7px 11px;border:1px solid #d9e1d8;border-radius:4px;color:#536953;background:#f8fbf7;cursor:pointer;text-decoration:none;font:500 10px 'DM Mono',monospace;text-transform:uppercase;white-space:nowrap}
+.uploaded-count-button:hover{border-color:var(--sage);color:var(--sage);background:var(--sage-soft)}
+
+/* nested item tables must be opaque so a transparent row can never paint over a neighbour */
+.ticket-items-table{background:#fff}
+
+/* ============================================================
+   Uniform button colour. Every action control now uses the same
+   primary orange as "Choose CSV", including the Restaurant branch
+   select and the Business date picker. The single exception is the
+   View / manage control, which keeps its own secondary colour.
+   Hover and press on a solid fill are driven by filter:brightness()
+   only, so the state change stays legible on a filled button without
+   introducing any new colour, and every control transitions so no
+   state snaps on hover (the source of the Choose CSV glitch).
+   ============================================================ */
+.file-button,.history-button,.history-open-button,.copy-button,.quiet-button,.delete-upload-button,.replace-upload-button,.warning button,.selectors select,.selectors input,.evidence-upload .secondary{
+  border-color:var(--orange);
+  color:#fff;
+  background:var(--orange);
+  transition:filter .15s ease,box-shadow .15s ease,transform .15s ease,background-color .15s ease,border-color .15s ease,color .15s ease
+}
+/* the branch select and date picker are a matched pair, so keep them equal and readable */
+.selectors select,.selectors input{font-weight:500}
+.selectors select option{color:var(--ink);background:#fffefa}
+.selectors input::-webkit-calendar-picker-indicator{filter:invert(1);opacity:.9;cursor:pointer}
+.selectors select:focus,.selectors input:focus{outline:2px solid #fff;outline-offset:2px;box-shadow:none}
+
+/* hover and press on the solid fill */
+.file-button:hover,.file-button.secondary:hover,.evidence-upload .secondary:hover,.history-button:hover,.history-open-button:hover,.copy-button:hover,.quiet-button:hover,.delete-upload-button:hover,.replace-upload-button:hover,.warning button:hover,.selectors select:hover,.selectors input:hover{filter:brightness(.93)}
+.file-button:not(.secondary):hover{box-shadow:0 6px 16px rgba(216,94,54,.2)}
+.file-button:active,.history-button:active,.history-open-button:active,.copy-button:active,.quiet-button:active,.delete-upload-button:active,.replace-upload-button:active,.warning button:active,.selectors select:active,.selectors input:active{filter:brightness(.88);transform:translateY(1px)}
+
+/* a solid fill still needs a focus ring that can be seen against it */
+.file-button:focus-visible,.history-button:focus-visible,.history-open-button:focus-visible,.copy-button:focus-visible,.quiet-button:focus-visible,.delete-upload-button:focus-visible,.replace-upload-button:focus-visible{outline:2px solid #fff;outline-offset:2px}
+
+/* disabled stays muted and explained, never a dead not-allowed cursor */
+.file-button:has(input:disabled),.history-button:disabled,.history-open-button:disabled,.copy-button:disabled,.quiet-button:disabled,.delete-upload-button:disabled,.replace-upload-button:disabled,.uploaded-count-button:disabled{cursor:help}

@@ -5,3 +5,5 @@ google-genai
 python-dotenv
 Pillow>=10.0.0
 pytesseract>=0.3.13
+psycopg[binary]>=3.2
+psycopg-pool>=3.2

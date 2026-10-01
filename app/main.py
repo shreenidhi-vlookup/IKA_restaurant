@@ -19,6 +19,14 @@ app.mount("/api/images/ticket_screenshots", StaticFiles(directory="data/uploads/
 app.mount("/api/images/dockets", StaticFiles(directory="data/uploads/dockets"), name="dockets")
 
 
+@app.middleware("http")
+async def cache_immutable_evidence_images(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith(("/api/images/ticket_screenshots/", "/api/images/dockets/")) and response.status_code == 200:
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
+
 @app.on_event("startup")
 async def startup_extraction_queue():
     await start_extraction_workers()

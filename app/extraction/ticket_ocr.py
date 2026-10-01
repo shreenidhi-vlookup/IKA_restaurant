@@ -616,3 +616,23 @@ def extract_ticket(path: str) -> tuple[dict[str, Any], str]:
         "extraction": parsed,
     }, ensure_ascii=False)
     return parsed, raw
+
+
+def classify_document(path: str) -> tuple[str, str]:
+    """Cheap content pre-check shared by both upload pipelines."""
+    pytesseract = _tesseract_module()
+    with Image.open(path) as source:
+        image = ImageOps.exif_transpose(source).convert("RGB")
+    if image.width < 600:
+        image = image.resize((int(image.width * 1.5), int(image.height * 1.5)), Image.Resampling.LANCZOS)
+    data = pytesseract.image_to_data(image, lang="eng", config="--oem 1 --psm 6", output_type=pytesseract.Output.DICT)
+    text = " ".join(str(value).strip() for value in data.get("text", []) if str(value).strip()).casefold()
+    compact = re.sub(r"[^a-z0-9#-]", "", text)
+    ticket_id = bool(re.search(r"\bticket\b.{0,18}#?\d{6}-\d+", text))
+    pos_headers = sum(bool(re.search(pattern, text)) for pattern in (r"\bitem\b", r"\bcategory\b", r"\bprice\b", r"\bqty\b|\bquantity\b", r"\btotal\b"))
+    docket_fields = sum(bool(re.search(pattern, text)) for pattern in (r"\border\s*(no|number)\b", r"\btable\s*(no|number)\b", r"\bcovers\b", r"\bdepartment\b"))
+    if ticket_id and pos_headers >= 1 and docket_fields < 2:
+        return "ticket", f"Ticket ID pattern and {pos_headers}/5 POS table headers detected"
+    if docket_fields >= 2 and not ticket_id:
+        return "docket", f"{docket_fields}/4 docket receipt fields detected"
+    return "uncertain", f"Insufficient structural OCR evidence (ticket ID={ticket_id}, POS headers={pos_headers}/5, docket fields={docket_fields}/4)"
