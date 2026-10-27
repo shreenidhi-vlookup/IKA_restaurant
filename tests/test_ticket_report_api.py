@@ -201,3 +201,14 @@ class TestExistingCsvEndpointPreserved:
         assert data["date"] == DATE
         assert "csv_dates" in data
         assert "promotions_in_file" in data
+
+
+def test_non_utf8_upload_returns_400(client):
+    body = VALID_CSV_COMMA.replace("RESTAURANT,JIHAD", "RESTAURANT,JIHADé").encode("latin-1")
+    response = client.post(
+        "/api/ticket-report",
+        files={"file": ("ticket_report.csv", body, "text/csv")},
+        data={"branch": BRANCH, "selected_date": DATE},
+    )
+    assert response.status_code == 400
+    assert "UTF-8" in response.json()["detail"]

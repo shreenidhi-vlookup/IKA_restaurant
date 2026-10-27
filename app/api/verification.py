@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.parsers.ticket_report_parser import parse_ticket_report, TicketReportParseError
-from app.services.unpaid_ticket_service import get_unpaid_tickets, count_unpaid_tickets
+from app.services.unpaid_ticket_service import get_unpaid_tickets
 from app.storage.db import get_db_connection
 
 router = APIRouter()
@@ -133,13 +133,15 @@ async def upload_ticket_report(branch: str = Form(...), selected_date: str = For
         raise HTTPException(400, "Date must be YYYY-MM-DD") from exc
     if not (file.filename or "").lower().endswith(".csv"):
         raise HTTPException(400, "Upload one CSV file")
-    content = (await file.read()).decode("utf-8-sig")
+    try:
+        content = (await file.read()).decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(400, "CSV must be UTF-8 encoded") from exc
     try:
         records = parse_ticket_report(content)
     except TicketReportParseError as exc:
         raise HTTPException(400, exc.message) from exc
     unpaid = get_unpaid_tickets(records)
-    unpaid_count = count_unpaid_tickets(records)
     unpaid_details = [
         {
             "ticket_id": ticket.ticket_id,
@@ -158,7 +160,7 @@ async def upload_ticket_report(branch: str = Form(...), selected_date: str = For
     ]
     return {
         "total_tickets": len(records),
-        "unpaid_count": unpaid_count,
+        "unpaid_count": len(unpaid),
         "unpaid_tickets": unpaid_details,
         "branch": branch,
         "date": selected_date,
