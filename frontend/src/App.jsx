@@ -68,6 +68,8 @@ export default function App() {
   const [emptyTicketDetail, setEmptyTicketDetail] = useState(null);
   // Unpaid ticket detail modal
   const [unpaidTicketDetail, setUnpaidTicketDetail] = useState(null);
+  // The ticket-report result is not refetched per branch/date, so drop it when the selection changes.
+  const clearTicketReport = () => { setTicketReportSummary(null); setTicketReportName(''); };
 
   const refresh = useCallback(async () => {
     if (!branch || !date) return;
@@ -385,13 +387,13 @@ export default function App() {
     <header className="topbar"><div className="brand-mark">H</div><div><span className="eyebrow">HAVELI · VERIFICATION</span><h1>Haveli Ticket Management</h1></div></header>
     <main>
       <section className="selection-card"><div><span className="eyebrow">WORKSPACE</span><h2>Select branch and date</h2></div><div className="selectors">
-        <label>Restaurant branch<select value={branch} onChange={(e) => { setBranch(e.target.value); setSummary(null); setHistoryOpen(false); }}><option value="">Choose branch</option>{BRANCHES.map((b) => <option key={b}>{b}</option>)}</select></label>
-        <label>Business date<input type="date" value={date} onChange={(e) => { setDate(e.target.value); setSummary(null); }} /></label>
+        <label>Restaurant branch<select value={branch} onChange={(e) => { setBranch(e.target.value); setSummary(null); clearTicketReport(); setHistoryOpen(false); }}><option value="">Choose branch</option>{BRANCHES.map((b) => <option key={b}>{b}</option>)}</select></label>
+        <label>Business date<input type="date" value={date} onChange={(e) => { setDate(e.target.value); setSummary(null); clearTicketReport(); }} /></label>
       </div></section>
       <section className="history-section">
         <span className="gated-control" onMouseEnter={() => onGateEnter('history')} onMouseLeave={() => onGateLeave('history')} onClick={() => onGateEnter('history')}><button className="history-button" disabled={!branch || historyLoading} onClick={toggleHistory}>{historyLoading ? <><Spinner />Loading records…</> : historyOpen ? 'Hide previous records' : 'View previous records'}</button>{gateHint('history')}</span>
         {historyOpen && <div className="history-panel"><div className="history-heading"><div><span className="eyebrow">SAVED CSV HISTORY</span><h3>{branch}</h3></div><span className="history-current">Selected date: {date}</span></div>
-          {historyDates.filter((item) => item.date < date).length === 0 ? <p className="empty-state">No earlier CSV imports for this branch.</p> : historyDates.filter((item) => item.date < date).map((item) => <div className="history-row" key={item.date}><span><strong>{item.date}</strong><small>{item.filename || 'CSV import'} · {item.item_rows} item rows · {item.flagged_rows} discrepancy rows</small></span><button className="history-open-button" onClick={() => { setDate(item.date); setActive('total'); setHistoryOpen(false); }}>View records</button></div>)}
+          {historyDates.filter((item) => item.date < date).length === 0 ? <p className="empty-state">No earlier CSV imports for this branch.</p> : historyDates.filter((item) => item.date < date).map((item) => <div className="history-row" key={item.date}><span><strong>{item.date}</strong><small>{item.filename || 'CSV import'} · {item.item_rows} item rows · {item.flagged_rows} discrepancy rows</small></span><button className="history-open-button" onClick={() => { setDate(item.date); clearTicketReport(); setActive('total'); setHistoryOpen(false); }}>View records</button></div>)}
         </div>}
       </section>
       <section className="csv-card"><div><span className="eyebrow">STEP 1 · TILL REPORT</span><h2>Upload CSV files</h2><p>Choose the branch and date first. Upload the TIL item report and optionally a ticket report for unpaid ticket detection.</p></div>
