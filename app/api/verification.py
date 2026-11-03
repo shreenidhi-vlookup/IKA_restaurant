@@ -8,6 +8,8 @@ from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
+from app.parsers.ticket_report_parser import parse_ticket_report, TicketReportParseError
+from app.services.unpaid_ticket_service import get_unpaid_tickets
 from app.storage.db import get_db_connection
 
 router = APIRouter()
@@ -119,6 +121,50 @@ async def upload_csv(branch: str = Form(...), selected_date: str = Form(...), fi
                      (branch, selected_date, file.filename, int(bool(promo_column))))
         conn.commit()
     return {"saved_rows": len(parsed), "branch": branch, "date": selected_date, "csv_dates": sorted({r.get("Date") for r in parsed if r.get("Date")}), "promotions_in_file": bool(promo_column)}
+
+
+@router.post("/ticket-report")
+async def upload_ticket_report(branch: str = Form(...), selected_date: str = Form(...), file: UploadFile = File(...)):
+    if not branch.strip():
+        raise HTTPException(400, "Select a branch")
+    try:
+        date.fromisoformat(selected_date)
+    except ValueError as exc:
+        raise HTTPException(400, "Date must be YYYY-MM-DD") from exc
+    if not (file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(400, "Upload one CSV file")
+    try:
+        content = (await file.read()).decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(400, "CSV must be UTF-8 encoded") from exc
+    try:
+        records = parse_ticket_report(content)
+    except TicketReportParseError as exc:
+        raise HTTPException(400, exc.message) from exc
+    unpaid = get_unpaid_tickets(records)
+    unpaid_details = [
+        {
+            "ticket_id": ticket.ticket_id,
+            "terminal": ticket.terminal,
+            "department": ticket.department,
+            "user": ticket.user,
+            "date": ticket.date,
+            "time": ticket.time,
+            "service": ticket.service,
+            "total": ticket.total,
+            "method": ticket.method,
+            "given": ticket.given,
+            "change": ticket.change,
+        }
+        for ticket in unpaid
+    ]
+    return {
+        "total_tickets": len(records),
+        "unpaid_count": len(unpaid),
+        "unpaid_tickets": unpaid_details,
+        "branch": branch,
+        "date": selected_date,
+    }
 
 
 def _ticket_candidates(row, tickets, branch, learned_suffixes):
