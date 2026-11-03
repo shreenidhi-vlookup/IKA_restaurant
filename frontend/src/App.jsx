@@ -61,6 +61,13 @@ export default function App() {
   const [dragKind, setDragKind] = useState('');
   const [uploadWarnings, setUploadWarnings] = useState({ ticket: '', docket: '' });
   const [hintFor, setHintFor] = useState('');
+  // Ticket report state
+  const [ticketReportName, setTicketReportName] = useState('');
+  const [ticketReportSummary, setTicketReportSummary] = useState(null);
+  // Empty ticket detail modal
+  const [emptyTicketDetail, setEmptyTicketDetail] = useState(null);
+  // Unpaid ticket detail modal
+  const [unpaidTicketDetail, setUnpaidTicketDetail] = useState(null);
 
   const refresh = useCallback(async () => {
     if (!branch || !date) return;
@@ -91,6 +98,17 @@ export default function App() {
       if (result.confirmation_required) { setDateWarning(result); setPendingCsv(file); return; }
       setDateWarning(null); setPendingCsv(null); setCsvName(file.name);
       await refresh();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  const submitTicketReport = async (file) => {
+    setBusy(true); setError('');
+    const body = new FormData();
+    body.append('branch', branch); body.append('selected_date', date); body.append('file', file);
+    try {
+      const result = await api('/ticket-report', { method: 'POST', body });
+      setTicketReportSummary(result);
+      setTicketReportName(file.name);
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
 
@@ -237,6 +255,81 @@ export default function App() {
     window.setTimeout(() => setCopiedKey(''), 1600);
   };
 
+  const isEmptyTicket = (ticket) => {
+    const items = parseJson(ticket.items);
+    return items.length === 0;
+  };
+
+  const showEmptyTicketDetail = (ticket) => {
+    setEmptyTicketDetail(ticket);
+  };
+
+  const copyEmptyTicketDetail = async () => {
+    if (!emptyTicketDetail) return;
+    const t = emptyTicketDetail;
+    const items = parseJson(t.items);
+    const reviewFlags = parseJson(t.review_flags);
+    const screenshots = parseJson(t.screenshot_filenames);
+    const lines = [
+      'Empty Ticket Details',
+      '--------------------',
+      `Ticket ID: ${t.ticket_id_display || `#${t.ticket_id}`}`,
+      `Restaurant: ${t.restaurant || '—'}`,
+      `Branch: ${t.selected_branch || '—'}`,
+      `Date: ${t.ticket_date || '—'}`,
+      `Terminal: ${t.terminal || '—'}`,
+      `Table: ${t.table_name || '—'}`,
+      `Department: ${t.department || '—'}`,
+      `User: ${t.user_name || '—'}`,
+      `Payment Status: ${t.payment_status || '—'}`,
+      `Credit Card Amount: ${t.credit_card_amount || '—'}`,
+      `Ticket Total: ${t.ticket_total || '—'}`,
+      `Grand Total: ${t.grand_total || '—'}`,
+      `Charged: ${t.charged || '—'}`,
+      `Items Count: ${items.length}`,
+      `Review Flags: ${reviewFlags.length > 0 ? reviewFlags.join(', ') : 'None'}`,
+      `Screenshots: ${screenshots.length > 0 ? screenshots.join(', ') : 'None'}`,
+    ];
+    try {
+      await copyText(lines.join('\n'));
+      setCopiedKey('empty-ticket');
+      window.setTimeout(() => setCopiedKey(''), 1600);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const showUnpaidTicketDetail = (ticket) => {
+    setUnpaidTicketDetail(ticket);
+  };
+
+  const copyUnpaidTicketDetail = async () => {
+    if (!unpaidTicketDetail) return;
+    const t = unpaidTicketDetail;
+    const lines = [
+      'Unpaid Ticket Details',
+      '---------------------',
+      `Ticket ID: ${t.ticket_id}`,
+      `Terminal: ${t.terminal || '—'}`,
+      `Department: ${t.department || '—'}`,
+      `User: ${t.user || '—'}`,
+      `Date: ${t.date || '—'}`,
+      `Time: ${t.time || '—'}`,
+      `Service: ${t.service || '—'}`,
+      `Total: £${Number(t.total || 0).toFixed(2)}`,
+      `Method: ${t.method || '—'}`,
+      `Given: £${Number(t.given || 0).toFixed(2)}`,
+      `Change: £${Number(t.change || 0).toFixed(2)}`,
+    ];
+    try {
+      await copyText(lines.join('\n'));
+      setCopiedKey('unpaid-ticket');
+      window.setTimeout(() => setCopiedKey(''), 1600);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
   const deleteUploadedFile = async (item) => {
     if (!window.confirm(`Delete ${item.original_filename || item.stored_filename} and its saved extraction data?`)) return;
     try {
@@ -301,8 +394,25 @@ export default function App() {
           {historyDates.filter((item) => item.date < date).length === 0 ? <p className="empty-state">No earlier CSV imports for this branch.</p> : historyDates.filter((item) => item.date < date).map((item) => <div className="history-row" key={item.date}><span><strong>{item.date}</strong><small>{item.filename || 'CSV import'} · {item.item_rows} item rows · {item.flagged_rows} discrepancy rows</small></span><button className="history-open-button" onClick={() => { setDate(item.date); setActive('total'); setHistoryOpen(false); }}>View records</button></div>)}
         </div>}
       </section>
-      <section className="csv-card"><div><span className="eyebrow">STEP 1 · TILL REPORT</span><h2>Upload one CSV file</h2><p>Choose the branch and date first. Every item row is saved for this selection.</p></div>
-        <span className="gated-control" onMouseEnter={() => onGateEnter('csv')} onMouseLeave={() => onGateLeave('csv')} onClick={() => onGateEnter('csv')}><label className="file-button">{busy ? <><Spinner />Working…</> : 'Choose CSV'}<input type="file" accept=".csv,text/csv" disabled={!branch || busy} onChange={(e) => { const file = e.target.files?.[0]; if (file) submitCsv(file); e.target.value = ''; }} /></label>{gateHint('csv')}{csvName && <span className="filename">{csvName}</span>}</span>
+      <section className="csv-card"><div><span className="eyebrow">STEP 1 · TILL REPORT</span><h2>Upload CSV files</h2><p>Choose the branch and date first. Upload the TIL item report and optionally a ticket report for unpaid ticket detection.</p></div>
+        <div className="upload-grid" style={{ marginTop: '12px' }}>
+          <div className="evidence-upload">
+            <span className="eyebrow">TIL ITEM REPORT</span>
+            <strong>Till CSV</strong>
+            <small>TIL export with Product Name, Quantity, Void, Cancel, Promotion columns</small>
+            <span className="gated-control" onMouseEnter={() => onGateEnter('csv')} onMouseLeave={() => onGateLeave('csv')} onClick={() => onGateEnter('csv')}>
+              <label className="file-button">{busy ? <><Spinner />Working…</> : 'Choose CSV'}<input type="file" accept=".csv,text/csv" disabled={!branch || busy} onChange={(e) => { const file = e.target.files?.[0]; if (file) submitCsv(file); e.target.value = ''; }} /></label>{gateHint('csv')}{csvName && <span className="filename">{csvName}</span>}
+            </span>
+          </div>
+          <div className="evidence-upload">
+            <span className="eyebrow">TICKET REPORT</span>
+            <strong>Ticket Report CSV</strong>
+            <small>Ticket report export with Ticket, Terminal, Total, Method columns for unpaid detection</small>
+            <span className="gated-control" onMouseEnter={() => onGateEnter('ticket-report')} onMouseLeave={() => onGateLeave('ticket-report')} onClick={() => onGateEnter('ticket-report')}>
+              <label className="file-button secondary">{busy ? <><Spinner />Working…</> : 'Choose CSV'}<input type="file" accept=".csv,text/csv" disabled={!branch || busy} onChange={(e) => { const file = e.target.files?.[0]; if (file) submitTicketReport(file); e.target.value = ''; }} /></label>{gateHint('ticket-report')}{ticketReportName && <span className="filename">{ticketReportName}</span>}
+            </span>
+          </div>
+        </div>
       </section>
       {dateWarning && <div className="warning"><span>{dateWarning.message} CSV dates: {dateWarning.csv_dates.join(', ')}</span><button onClick={() => pendingCsv && submitCsv(pendingCsv, true)}>Confirm and import</button><button className="quiet-button" onClick={() => { setDateWarning(null); setPendingCsv(null); }}>Cancel</button></div>}
       {error && <pre className="error-banner">{error}</pre>}
@@ -313,6 +423,24 @@ export default function App() {
         </div>)}</div>
         {active && <div className="detail-list"><div className="list-heading"><div><span className="eyebrow">{active.toUpperCase()} ROWS</span><h3>{active === 'total' ? 'All CSV item rows' : active === 'status' ? 'Flagged rows needing attention' : `${active[0].toUpperCase()}${active.slice(1)} items`}</h3></div><button className="quiet-button" onClick={() => setActive('')}>Close</button></div>
           {selectedRows.length === 0 ? <p className="empty-state">No matching CSV rows.</p> : selectedRows.map((row) => <button key={row.id} className="csv-row" onClick={() => showDetail(row, active)}><span><strong>{row.product}</strong><small>Qty {row.quantity} · {row.user_name} · {row.department} · {row.till}</small></span><span className="row-value">£{Number(row.sales_value || 0).toFixed(2)}</span><span className={`status-pill ${statusLabel(row, active).replace(' ', '-')}`}>{statusLabel(row, active)}{row.matches?.[active === 'promotions' ? 'promotion' : active]?.total > 1 && ` · ${row.matches[active === 'promotions' ? 'promotion' : active].verified} of ${row.matches[active === 'promotions' ? 'promotion' : active].total}`}</span></button>)}
+        </div>}
+      </section>}
+      {ticketReportSummary && <section className="ticket-data-section"><div className="section-title"><div><span className="eyebrow">TICKET REPORT SUMMARY</span><h2>Unpaid ticket detection</h2><p>Results from ticket report upload for {branch} · {date}.</p></div></div>
+        <div className="summary-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(0,1fr))' }}>
+          <div className="summary-box">
+            <button className="summary-select"><span className="box-title">Total Tickets</span><strong>{ticketReportSummary.total_tickets}</strong><small>Tickets processed from report</small></button>
+          </div>
+          <div className="summary-box">
+            <button className="summary-select"><span className="box-title">Unpaid Count</span><strong>{ticketReportSummary.unpaid_count}</strong><small>Tickets with Method = Unpaid</small></button>
+          </div>
+          <div className="summary-box">
+            <button className="summary-select"><span className="box-title">Branch</span><strong>{ticketReportSummary.branch}</strong><small>Date: {ticketReportSummary.date}</small></button>
+          </div>
+        </div>
+        {ticketReportSummary.unpaid_tickets.length > 0 && <div className="detail-list"><div className="list-heading"><h3>Unpaid Tickets</h3></div>
+          <div className="data-table-scroll"><table className="ticket-data-table"><thead><tr><th>Ticket ID</th><th>Total</th><th>Method</th></tr></thead><tbody>
+            {ticketReportSummary.unpaid_tickets.map((ticket, index) => <tr key={index} onClick={() => showUnpaidTicketDetail(ticket)} style={{ cursor: 'pointer' }}><td><strong>{ticket.ticket_id}</strong></td><td>£{Number(ticket.total || 0).toFixed(2)}</td><td>{ticket.method}</td></tr>)}
+          </tbody></table></div>
         </div>}
       </section>}
       {unassigned.length > 0 && <section className="unassigned-section"><h2>Ticket screenshots needing an ID</h2>{unassigned.map((item) => <div className="history-row" key={item.filename}><span><strong>{item.filename}</strong><small>{item.issue}</small></span><button className="history-open-button" onClick={() => resolveScreenshot(item)}>Assign ticket ID</button></div>)}</section>}
@@ -328,7 +456,8 @@ export default function App() {
           <th>Ticket number</th><th>Restaurant</th><th>Date</th><th>Terminal</th><th>Table</th><th>Department</th><th>User</th><th>Payment status</th><th>Credit card amount</th><th>Items</th><th>Ticket total</th><th>Grand total</th><th>Charged</th>
         </tr></thead><tbody>{tickets.map((ticket) => {
           const items = parseJson(ticket.items);
-          return <tr key={ticket.ticket_id}><td><strong>{ticket.ticket_id_display || `#${ticket.ticket_id}`}</strong></td><td>{ticket.restaurant || '—'}</td><td>{ticket.ticket_date || '—'}</td><td>{ticket.terminal || '—'}</td><td>{ticket.table_name || '—'}</td><td>{ticket.department || '—'}</td><td>{ticket.user_name || '—'}</td><td>{ticket.payment_status || '—'}</td><td>{ticket.credit_card_amount || '—'}</td><td>{items.length ? <details><summary>{items.length} item{items.length === 1 ? '' : 's'}</summary><div className="data-table-scroll nested-data-scroll"><table className="ticket-items-table"><thead><tr><th>Item</th><th>Modifier</th><th>Category</th><th>Price</th><th>Qty</th><th>Total</th><th>Void</th><th>Signals</th></tr></thead><tbody>{items.map((item, index) => {
+          const empty = isEmptyTicket(ticket);
+          return <tr key={ticket.ticket_id} onClick={empty ? () => showEmptyTicketDetail(ticket) : undefined} style={empty ? { cursor: 'pointer' } : undefined} title={empty ? 'Click to view details' : ''}><td><strong>{ticket.ticket_id_display || `#${ticket.ticket_id}`}</strong></td><td>{ticket.restaurant || '—'}</td><td>{ticket.ticket_date || '—'}</td><td>{ticket.terminal || '—'}</td><td>{ticket.table_name || '—'}</td><td>{ticket.department || '—'}</td><td>{ticket.user_name || '—'}</td><td>{ticket.payment_status || '—'}</td><td>{ticket.credit_card_amount || '—'}</td><td>{items.length ? <details><summary>{items.length} item{items.length === 1 ? '' : 's'}</summary><div className="data-table-scroll nested-data-scroll"><table className="ticket-items-table"><thead><tr><th>Item</th><th>Modifier</th><th>Category</th><th>Price</th><th>Qty</th><th>Total</th><th>Void</th><th>Signals</th></tr></thead><tbody>{items.map((item, index) => {
             const signals = item.signals || {};
             const fired = [['row_tint', 'Row tint'], ['strikethrough_line', 'Strikethrough'], ['void_label_text', 'Void label']].filter(([key]) => signals[key] || item[key]);
             return <tr key={`${ticket.ticket_id}-${index}`} className={item.is_void ? 'data-void-row' : ''}><td>{item.item || item.name || '—'}</td><td>{item.modifier || '—'}</td><td>{item.category || '—'}</td><td>{item.price || item.unit_price || '—'}</td><td>{item.qty ?? item.quantity ?? '—'}</td><td>{item.total || '—'}</td><td>{item.is_void ? 'Yes' : 'No'}{item.void_confidence === 'low' && <small className="data-review-note">Spot-check</small>}</td><td>{fired.map(([, label]) => label).join(', ') || '—'}</td></tr>;
@@ -362,6 +491,12 @@ export default function App() {
           {docket ? <><h3>Docket · Order {docket.docket_order_no}</h3><dl><dt>Date / time</dt><dd>{docket.docket_date || '—'} {docket.docket_time || ''}</dd><dt>Department / staff</dt><dd>{docket.department || '—'} · {docket.staff_name || '—'}</dd><dt>Table / covers</dt><dd>{docket.table_name || '—'} · {docket.covers || '—'}</dd><dt>Items</dt><dd>{itemLines.map((line) => `${line.quantity || line.qty || ''} ${line.name || ''}${line.is_void ? ' (VOID)' : ''}`).join('; ') || docket.item || '—'}</dd><dt>Description</dt><dd>{docket.handwritten_reason || <span className="warning-badge">No description</span>} · Confidence {docket.description_confidence ?? '—'}</dd></dl>{parse(docket.field_conflicts).map((conflict, n) => <span className="warning-badge" key={n}>{conflict.field}: {conflict.values.join(' / ')}</span>)}{parse(docket.partial_fields).map((field) => <span className="warning-badge" key={field}>Partial: {field}</span>)}<div className="thumbnail-row">{docketImages.map((filename) => <img key={filename} className="evidence-thumb" src={`/api/images/dockets/${filename}`} alt={`Docket photo ${filename}`} />)}</div></> : <h3>Docket · Pending match</h3>}
         </article>;
       }): <p className="empty-state">No unique matched ticket and docket yet. Current status: {detail.row.row_status.replace('_',' ')}.</p>}</div>
+    </section></div>}
+    {emptyTicketDetail && <div className="modal-backdrop" onClick={() => setEmptyTicketDetail(null)}><section className="detail-modal" onClick={(e) => e.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">EMPTY TICKET</span><h2>{emptyTicketDetail.ticket_id_display || `#${emptyTicketDetail.ticket_id}`}</h2></div><div className="modal-actions"><button className="copy-button" onClick={copyEmptyTicketDetail}>{copiedKey === 'empty-ticket' ? 'Copied' : 'Copy Details'}</button><button className="quiet-button" onClick={() => setEmptyTicketDetail(null)}>Close</button></div></div>
+      <div className="evidence-columns"><article><h3>Ticket Details</h3><dl><dt>Ticket ID</dt><dd>{emptyTicketDetail.ticket_id_display || `#${emptyTicketDetail.ticket_id}`}</dd><dt>Restaurant</dt><dd>{emptyTicketDetail.restaurant || '—'}</dd><dt>Branch</dt><dd>{emptyTicketDetail.selected_branch || '—'}</dd><dt>Date</dt><dd>{emptyTicketDetail.ticket_date || '—'}</dd><dt>Terminal</dt><dd>{emptyTicketDetail.terminal || '—'}</dd><dt>Table</dt><dd>{emptyTicketDetail.table_name || '—'}</dd><dt>Department</dt><dd>{emptyTicketDetail.department || '—'}</dd><dt>User</dt><dd>{emptyTicketDetail.user_name || '—'}</dd><dt>Payment Status</dt><dd>{emptyTicketDetail.payment_status || '—'}</dd><dt>Credit Card Amount</dt><dd>{emptyTicketDetail.credit_card_amount || '—'}</dd><dt>Ticket Total</dt><dd>{emptyTicketDetail.ticket_total || '—'}</dd><dt>Grand Total</dt><dd>{emptyTicketDetail.grand_total || '—'}</dd><dt>Charged</dt><dd>{emptyTicketDetail.charged || '—'}</dd><dt>Items</dt><dd>No items extracted</dd><dt>Review Flags</dt><dd>{(parseJson(emptyTicketDetail.review_flags).length > 0 ? parseJson(emptyTicketDetail.review_flags).join(', ') : 'None')}</dd><dt>Screenshots</dt><dd>{(parseJson(emptyTicketDetail.screenshot_filenames).length > 0 ? parseJson(emptyTicketDetail.screenshot_filenames).join(', ') : 'None')}</dd></dl></article></div>
+    </section></div>}
+    {unpaidTicketDetail && <div className="modal-backdrop" onClick={() => setUnpaidTicketDetail(null)}><section className="detail-modal" onClick={(e) => e.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">UNPAID TICKET</span><h2>{unpaidTicketDetail.ticket_id}</h2></div><div className="modal-actions"><button className="copy-button" onClick={copyUnpaidTicketDetail}>{copiedKey === 'unpaid-ticket' ? 'Copied' : 'Copy Details'}</button><button className="quiet-button" onClick={() => setUnpaidTicketDetail(null)}>Close</button></div></div>
+      <div className="evidence-columns"><article><h3>Ticket Details</h3><dl><dt>Ticket ID</dt><dd>{unpaidTicketDetail.ticket_id}</dd><dt>Terminal</dt><dd>{unpaidTicketDetail.terminal || '—'}</dd><dt>Department</dt><dd>{unpaidTicketDetail.department || '—'}</dd><dt>User</dt><dd>{unpaidTicketDetail.user || '—'}</dd><dt>Date</dt><dd>{unpaidTicketDetail.date || '—'}</dd><dt>Time</dt><dd>{unpaidTicketDetail.time || '—'}</dd><dt>Service</dt><dd>{unpaidTicketDetail.service || '—'}</dd><dt>Total</dt><dd>£{Number(unpaidTicketDetail.total || 0).toFixed(2)}</dd><dt>Method</dt><dd>{unpaidTicketDetail.method || '—'}</dd><dt>Given</dt><dd>£{Number(unpaidTicketDetail.given || 0).toFixed(2)}</dd><dt>Change</dt><dd>£{Number(unpaidTicketDetail.change || 0).toFixed(2)}</dd></dl></article></div>
     </section></div>}
     {managingKind && <div className="modal-backdrop" onClick={() => { setManagingKind(''); setPreviewUpload(null); }}><section className="detail-modal upload-manager-modal" onClick={(e) => e.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">SAVED EVIDENCE</span><h2>{managingKind === 'ticket' ? 'Uploaded ticket images' : 'Uploaded docket images'} <span className="entry-count">{managedFiles.length}</span></h2></div><button className="quiet-button" onClick={() => { setManagingKind(''); setPreviewUpload(null); }}>Close</button></div>
       {managedFiles.length ? <div className="uploaded-image-grid">{managedFiles.map((item) => <article className="uploaded-image-card" key={`${item.kind}-${item.stored_filename}`}><button className="upload-preview-button" onClick={() => setPreviewUpload(item)}><img src={item.url} alt={`${item.kind} upload ${item.original_filename}`} /></button><div className="uploaded-image-info"><strong title={item.original_filename}>{item.original_filename}</strong><small>{item.provider || item.status} · {item.message}</small><label className="replace-upload-button">{busy ? <><Spinner />Replace…</> : 'Replace'}<input type="file" accept="image/*" disabled={busy} onChange={(e) => { const file = e.target.files?.[0]; if (file) replaceUploadedFile(item, file); e.target.value = ''; }} /></label></div><button className="delete-upload-button" disabled={item.status === 'queued' || item.status === 'processing'} onClick={() => deleteUploadedFile(item)}>Delete</button></article>)}</div> : <p className="empty-state">No saved images for this branch and date.</p>}
