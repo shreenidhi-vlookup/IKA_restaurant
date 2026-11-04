@@ -1,0 +1,5 @@
+.haveli-floor-app .hf-copy-control { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 6px; max-width: 100%; }
+.haveli-floor-app .hf-copy-button { white-space: nowrap; }
+.haveli-floor-app .hf-copy-error { color: #903f3a; font-size: 12px; overflow-wrap: anywhere; }
+.haveli-floor-app .hf-copy-announcement { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+.haveli-floor-app .hf-dialog-actions { display: flex; align-items: start; flex-wrap: wrap; gap: 10px; }

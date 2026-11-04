@@ -1,0 +1,50 @@
+/* Read-only ticket/docket workspace, isolated to the Floor application. */
+.haveli-floor-app .hf-record-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; margin: 18px 0; }
+.haveli-floor-app .hf-record-switch { display: flex; flex-wrap: wrap; gap: 6px; }
+.haveli-floor-app .hf-record-switch button[aria-pressed='true'] { background: #354e68; border-color: #354e68; color: #fff; }
+.haveli-floor-app .hf-tickets > .hf-panel > header { justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.haveli-floor-app .hf-record-count { font-size: 12px; color: #526578; }
+.haveli-floor-app .hf-record-filters { display: flex; align-items: end; flex-wrap: wrap; gap: 14px; padding: 18px 22px; border-bottom: 1px solid #cbd5df; background: #eaf0f5; }
+.haveli-floor-app .hf-record-filters label { display: grid; gap: 6px; color: #354e68; font-size: 12px; font-weight: 600; }
+.haveli-floor-app .hf-record-search { flex: 1; min-width: 240px; }
+.haveli-floor-app .hf-record-filters input, .haveli-floor-app .hf-record-filters select { min-height: 42px; max-width: 100%; padding: 9px 11px; font: inherit; font-size: 13px; color: #23374b; background: #fff; border: 1px solid #8ca0b3; border-radius: 4px; }
+.haveli-floor-app .hf-record-filters input::placeholder { color: #617285; opacity: 1; }
+.haveli-floor-app .hf-record-scope-note { color: #526578; font-size: 12px; padding: 14px 22px; border-bottom: 1px solid #cbd5df; }
+.haveli-floor-app .hf-record-scroll { overflow: auto; max-width: 100%; background: #fff; }
+.haveli-floor-app .hf-record-scroll table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; font-variant-numeric: tabular-nums; }
+.haveli-floor-app .hf-record-scroll th { color: #354e68; font-size: 12px; font-weight: 650; background: #e8eef3; }
+.haveli-floor-app .hf-record-scroll th, .haveli-floor-app .hf-record-scroll td { padding: 14px 17px; vertical-align: top; border-bottom: 1px solid #dce3e9; min-width: 90px; }
+.haveli-floor-app .hf-record-scroll th[scope='col'] { white-space: nowrap; }
+.haveli-floor-app .hf-record-scroll tbody th[scope='row'] { position: sticky; left: 0; min-width: 165px; z-index: 1; background: #f3f6f8; }
+.haveli-floor-app .hf-record-scroll tbody tr:hover > td { background: #f1f7f8; }
+.haveli-floor-app .hf-record-scroll small { display: block; margin-top: 6px; font-size: 11px; color: #526578; }
+.haveli-floor-app .hf-record-scroll td details { min-width: 160px; }
+.haveli-floor-app .hf-record-scroll summary { cursor: pointer; color: #08696e; font-size: 12px; font-weight: 650; }
+.haveli-floor-app .hf-record-scroll details > .hf-record-scroll { max-width: min(650px, 75vw); border: 1px solid #cbd5df; border-radius: 4px; margin-top: 12px; }
+.haveli-floor-app .hf-record-scroll .hf-void-item > td { background: #fcf0ec; }
+.haveli-floor-app .hf-record-scroll .hf-void-item > td:first-child { border-left: 3px solid #ad756a; }
+.haveli-floor-app .hf-record-scroll .hf-record-empty { padding: 26px 22px; color: #526578; font-size: 13px; }
+.haveli-floor-app .hf-record-flag { display: inline-block; border: 1px solid #ddbab5; color: #903f3a; background: #f8e9e8; border-radius: 4px; padding: 3px 7px; font-size: 11px; line-height: 1.5; font-weight: 600; }
+.haveli-floor-app .hf-record-flag.is-saved { border-color: #a0ccc5; background: #e1f1ee; color: #0b625f; }
+.haveli-floor-app .hf-record-notes { min-width: 130px; color: #79563c; font-size: 12px; }
+.haveli-floor-app .hf-record-notes > p { margin-top: 8px; overflow-wrap: anywhere; }
+.haveli-floor-app .hf-record-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin: 22px 0; }
+.haveli-floor-app .hf-record-fields dt { color: #526578; font-size: 12px; }
+.haveli-floor-app .hf-record-fields dd { color: #23374b; font-size: 13px; font-weight: 600; margin: 5px 0 0; overflow-wrap: anywhere; }
+.haveli-floor-app .hf-record-detail-section, .haveli-floor-app .hf-record-evidence { border-top: 1px solid #cbd5df; padding-top: 20px; margin-top: 22px; }
+.haveli-floor-app .hf-record-detail-section h3, .haveli-floor-app .hf-record-evidence h3 { margin: 0 0 16px; color: #354e68; font-size: 16px; }
+.haveli-floor-app .hf-record-evidence h3 > span { font-size: 12px; color: #526578; }
+.haveli-floor-app .hf-record-warning { color: #903f3a; border: 1px solid #ddbab5; border-radius: 4px; padding: 14px 16px; background: #f8e9e8; font-size: 13px; }
+.haveli-floor-app .hf-record-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
+.haveli-floor-app .hf-record-gallery > div { min-width: 0; }
+.haveli-floor-app .hf-record-gallery small { display: block; color: #526578; font-size: 11px; margin-top: 6px; overflow-wrap: anywhere; }
+.haveli-floor-app .hf-record-thumbnail { display: block; width: 100%; padding: 0; background: #fff; border: 1px solid #cbd5df; border-radius: 5px; cursor: zoom-in; overflow: hidden; }
+.haveli-floor-app .hf-record-image { display: block; width: 100%; height: 160px; object-fit: contain; }
+.haveli-floor-app .hf-record-image-large { display: block; max-width: 100%; max-height: 65vh; margin: 18px auto 0; object-fit: contain; }
+.haveli-floor-app .hf-image-unavailable { display: block; padding: 20px; background: #eef2f5; color: #526578; font-size: 12px; }
+.haveli-floor-app .hf-record-large-preview { margin: 20px 0 0; border: 1px solid #cbd5df; border-radius: 5px; padding: 16px; background: #fff; }
+.haveli-floor-app .hf-record-large-preview figcaption { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; font-size: 12px; overflow-wrap: anywhere; }
+.haveli-floor-app .hf-record-link { display: inline-block; margin-top: 18px; font-size: 13px; font-weight: 600; color: #08696e; text-underline-offset: 4px; }
+.haveli-floor-app .hf-record-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+@media (max-width: 900px) { .haveli-floor-app .hf-record-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .haveli-floor-app .hf-record-filters { padding: 16px; gap: 12px; } .haveli-floor-app .hf-record-filters label { flex: 1 1 150px; min-width: 0; } .haveli-floor-app .hf-record-filters .hf-record-search { flex-basis: 100%; } .haveli-floor-app .hf-record-fields { grid-template-columns: 1fr; } .haveli-floor-app .hf-record-scroll th, .haveli-floor-app .hf-record-scroll td { padding: 12px; } }

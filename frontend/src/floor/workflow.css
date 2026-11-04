@@ -1,0 +1,56 @@
+.haveli-floor-app .hf-workflow-panel { margin-bottom: 22px; }
+.haveli-floor-app .hf-workflow-panel > header { justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.haveli-floor-app .hf-workflow-panel h3 { margin: 0; font-size: 17px; color: #354e68; }
+.haveli-floor-app .hf-workflow-note { padding: 16px 22px; color: #526578; font-size: 12px; }
+.haveli-floor-app .hf-workflow-link { color: #08696e; font-size: 12px; font-weight: 600; text-underline-offset: 4px; }
+.haveli-floor-app .hf-workload-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 22px; }
+.haveli-floor-app .hf-workload-cards > a { display: grid; grid-template-columns: 1fr auto; gap: 10px; text-decoration: none; border: 1px solid #cbd5df; border-radius: 6px; background: #f3f6f8; padding: 18px; }
+.haveli-floor-app .hf-workload-cards > a:hover { border-color: #087c80; }
+.haveli-floor-app .hf-workload-cards strong { grid-column: 1; color: #354e68; font-size: 28px; line-height: 1.2; font-weight: 650; }
+.haveli-floor-app .hf-workload-cards span { font-size: 12px; color: #526578; }
+.haveli-floor-app .hf-workload-cards span:last-child { grid-column: 2; grid-row: 1; font-size: 18px; }
+.haveli-floor-app .hf-overview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.haveli-floor-app .hf-workflow-list, .haveli-floor-app .hf-workflow-checks { list-style: none; padding: 0 22px; margin: 0; }
+.haveli-floor-app .hf-workflow-list li, .haveli-floor-app .hf-workflow-checks li { padding: 16px 0; border-top: 1px solid #dce3e9; font-size: 13px; overflow-wrap: anywhere; }
+.haveli-floor-app .hf-workflow-list li a { display: grid; gap: 6px; text-decoration: none; }
+.haveli-floor-app .hf-workflow-list p, .haveli-floor-app .hf-workflow-list span, .haveli-floor-app .hf-workflow-checks p { color: #526578; font-size: 12px; margin-top: 5px; }
+.haveli-floor-app .hf-workflow-checks li { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.haveli-floor-app .hf-workflow-state { display: inline-block; flex-shrink: 0; padding: 4px 8px; font-size: 11px; border: 1px solid #b4c3d1; color: #354e68; background: #e9eff4; border-radius: 4px; text-decoration: none; }
+.haveli-floor-app .hf-workflow-state.is-complete { color: #0b625f; border-color: #a0ccc5; background: #e1f1ee; }
+.haveli-floor-app .hf-workflow-state.is-attention { color: #903f3a; border-color: #ddbab5; background: #f8e9e8; }
+.haveli-floor-app .hf-workflow-table { overflow-x: auto; }
+.haveli-floor-app .hf-workflow-table table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+.haveli-floor-app .hf-workflow-table thead th { background: #e8eef3; color: #354e68; font-size: 12px; }
+.haveli-floor-app .hf-workflow-table th, .haveli-floor-app .hf-workflow-table td { padding: 14px 18px; border-bottom: 1px solid #dce3e9; vertical-align: top; min-width: 110px; }
+.haveli-floor-app .hf-workflow-table tbody th { color: #354e68; font-weight: 600; }
+.haveli-floor-app .hf-workflow-table small { display: block; color: #526578; font-size: 12px; margin-top: 5px; }
+.haveli-floor-app .hf-workflow-table tbody tr:hover { background: #eef5f6; }
+.haveli-floor-app .hf-workflow-history-actions { padding: 0 22px 18px; }
+.haveli-floor-app .hf-report-charts > header { margin-bottom: 18px; }
+.haveli-floor-app .hf-report-charts > header h2 { margin-bottom: 6px; }
+.haveli-floor-app .hf-report-charts > header p { color: #526578; font-size: 12px; }
+.haveli-floor-app .hf-report-donut-layout { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 22px; padding: 22px; }
+.haveli-floor-app .hf-report-donut-layout figure { flex: 0 0 190px; margin: 0; }
+.haveli-floor-app .hf-report-donut-layout svg { width: 190px; height: 190px; display: block; }
+.haveli-floor-app .hf-report-donut-layout figcaption { color: #526578; font-size: 11px; text-align: center; }
+.haveli-floor-app .hf-report-total { fill: #23374b; font-size: 27px; font-weight: 600; }
+.haveli-floor-app .hf-report-total-label { fill: #526578; font-size: 9px; }
+.haveli-floor-app .hf-report-donut-layout ul { padding: 0; margin: 0; list-style: none; min-width: 145px; }
+.haveli-floor-app .hf-report-donut-layout li { display: flex; align-items: center; gap: 9px; padding: 8px 0; font-size: 13px; }
+.haveli-floor-app .hf-report-donut-layout li span { flex: 1; }
+.haveli-floor-app .hf-report-donut-layout i { width: 10px; height: 10px; border-radius: 2px; }
+.haveli-floor-app .hf-report-colour-0 { background: #354e68; }
+.haveli-floor-app .hf-report-colour-1 { background: #087c80; }
+.haveli-floor-app .hf-report-colour-2 { background: #ad756a; }
+.haveli-floor-app .hf-report-stroke-0 { stroke: #354e68; }
+.haveli-floor-app .hf-report-stroke-1 { stroke: #087c80; }
+.haveli-floor-app .hf-report-stroke-2 { stroke: #ad756a; }
+.haveli-floor-app .hf-report-bars { padding: 18px 22px; }
+.haveli-floor-app .hf-report-bars > header { display: flex; justify-content: space-between; gap: 16px; font-size: 12px; }
+.haveli-floor-app .hf-report-bars h4 { margin: 0; font-size: 13px; }
+.haveli-floor-app .hf-report-bars ul { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 12px; }
+.haveli-floor-app .hf-report-bars li > div { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 5px; }
+.haveli-floor-app .hf-report-track { display: block; background: #dfe7ed; border-radius: 3px; height: 8px; overflow: hidden; }
+.haveli-floor-app .hf-report-track > span { display: block; height: 100%; }
+@media (max-width: 1100px) { .haveli-floor-app .hf-overview-grid { grid-template-columns: 1fr; gap: 0; } .haveli-floor-app .hf-workload-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .haveli-floor-app .hf-workflow-checks li { align-items: start; flex-direction: column; } .haveli-floor-app .hf-workload-cards > a { padding: 14px; } }
