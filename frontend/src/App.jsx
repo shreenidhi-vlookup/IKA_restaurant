@@ -1,15 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
+import { api } from './api.js';
 import './App.css';
 
 const BRANCHES = ['Haweli Restaurant Southall', 'Haweli Restaurant Norbury', 'Haweli Ilford Ltd'];
 const today = new Date().toISOString().slice(0, 10);
-
-async function api(url, options = {}) {
-  const response = await fetch(`/api${url}`, options);
-  const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || 'Request failed'));
-  return data;
-}
 
 function parseJson(value, fallback = []) {
   try { return JSON.parse(value || JSON.stringify(fallback)); } catch { return fallback; }

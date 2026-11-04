@@ -1,0 +1,56 @@
+.haveli-floor-app .hf-verification-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.haveli-floor-app .hf-verification-box { border: 1px solid #cbd5df; border-radius: 6px; background: #f3f6f8; padding: 16px; min-width: 0; }
+.haveli-floor-app .hf-verification-box.is-selected { border-color: #087c80; background: #e5f2f2; box-shadow: inset 0 3px #087c80; }
+.haveli-floor-app .hf-category-button { display: grid; gap: 9px; border: 0; padding: 0; margin: 0 0 14px; width: 100%; min-height: 114px; background: transparent; color: #23374b; text-align: left; cursor: pointer; }
+.haveli-floor-app .hf-category-button > span { color: #354e68; font-size: 13px; font-weight: 650; }
+.haveli-floor-app .hf-category-button strong { font-size: 19px; line-height: 1.4; overflow-wrap: anywhere; }
+.haveli-floor-app .hf-category-button small { color: #526578; font-size: 12px; line-height: 1.6; }
+.haveli-floor-app .hf-verification-box .hf-copy-button { padding: 7px 9px; min-height: 36px; font-size: 12px; }
+.haveli-floor-app .hf-match-copy-note { color: #526578; font-size: 12px; margin: 16px 0 22px; }
+.haveli-floor-app .hf-match-layout { display: grid; grid-template-columns: minmax(250px, 0.75fr) minmax(0, 1.8fr); align-items: start; gap: 20px; }
+.haveli-floor-app .hf-match-queue { position: sticky; top: 130px; }
+.haveli-floor-app .hf-match-queue > header { justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 16px; }
+.haveli-floor-app .hf-match-queue h2 { font-size: 17px; }
+.haveli-floor-app .hf-match-filters { display: grid; gap: 12px; padding: 16px; border-bottom: 1px solid #cbd5df; background: #eaf0f5; }
+.haveli-floor-app .hf-match-filters label { display: grid; gap: 6px; font-size: 12px; font-weight: 600; }
+.haveli-floor-app .hf-match-filters input, .haveli-floor-app .hf-match-filters select { width: 100%; min-height: 40px; border: 1px solid #8ca0b3; border-radius: 4px; background: #fff; color: #23374b; font: inherit; font-size: 13px; padding: 8px 10px; }
+.haveli-floor-app .hf-match-filters > span { color: #526578; font-size: 12px; }
+.haveli-floor-app .hf-match-filters input::placeholder { color: #617285; opacity: 1; }
+.haveli-floor-app .hf-match-queue ul { list-style: none; padding: 0; margin: 0; max-height: 55vh; overflow-y: auto; }
+.haveli-floor-app .hf-match-queue li > button { display: grid; gap: 8px; width: 100%; padding: 16px; text-align: left; color: #23374b; background: #fff; border: 0; border-bottom: 1px solid #dce3e9; cursor: pointer; }
+.haveli-floor-app .hf-match-queue li > button:hover { background: #edf5f6; }
+.haveli-floor-app .hf-match-queue li > button[aria-pressed='true'] { background: #e5f2f2; box-shadow: inset 3px 0 #087c80; }
+.haveli-floor-app .hf-match-queue li strong { font-size: 14px; }
+.haveli-floor-app .hf-match-queue li small { color: #526578; font-size: 12px; }
+.haveli-floor-app .hf-match-row-meta { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; font-size: 12px; }
+.haveli-floor-app .hf-match-status { display: inline-block; border: 1px solid #b4c3d1; border-radius: 4px; padding: 3px 8px; background: #e9eff4; color: #354e68; font-size: 11px; line-height: 1.5; font-weight: 650; text-transform: capitalize; white-space: nowrap; }
+.haveli-floor-app .hf-match-status--verified { background: #e1f1ee; color: #0b625f; border-color: #a0ccc5; }
+.haveli-floor-app .hf-match-status--partial { background: #f7efdf; color: #795d22; border-color: #d9c79f; }
+.haveli-floor-app .hf-match-status--needs_review { background: #f8e9e8; color: #903f3a; border-color: #ddbab5; }
+.haveli-floor-app .hf-match-status--not_flagged { color: #526578; background: #f3f6f8; }
+.haveli-floor-app .hf-match-detail { min-width: 0; }
+.haveli-floor-app .hf-open-detail { margin-bottom: 14px; }
+.haveli-floor-app .hf-match-evidence > .hf-panel { margin-bottom: 20px; }
+.haveli-floor-app .hf-match-evidence > .hf-panel > header { justify-content: space-between; align-items: start; gap: 12px; }
+.haveli-floor-app .hf-match-evidence .hf-record-fields { margin-top: 0; }
+.haveli-floor-app .hf-match-detail-actions { display: flex; align-items: start; flex-wrap: wrap; gap: 12px 20px; margin: 20px 0; }
+.haveli-floor-app .hf-match-detail-actions .hf-record-link { margin-top: 9px; }
+.haveli-floor-app .hf-match-candidate { margin-bottom: 20px; background: #fff; border: 1px solid #cbd5df; border-radius: 6px; min-width: 0; overflow: hidden; }
+.haveli-floor-app .hf-match-candidate > header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid #cbd5df; background: #eaf0f5; }
+.haveli-floor-app .hf-match-candidate h3 { margin: 0; font-size: 16px; }
+.haveli-floor-app .hf-match-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.haveli-floor-app .hf-match-pair > article { min-width: 0; padding: 20px; }
+.haveli-floor-app .hf-match-pair > article + article { border-left: 1px solid #dce3e9; }
+.haveli-floor-app .hf-match-pair h4 { margin: 0 0 14px; font-size: 15px; color: #354e68; overflow-wrap: anywhere; }
+.haveli-floor-app .hf-match-pair .hf-record-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 18px 0; }
+.haveli-floor-app .hf-matched-line { margin: 16px 0; padding: 12px; border-left: 3px solid #8ca0b3; background: #f3f6f8; }
+.haveli-floor-app .hf-matched-line h4 { font-size: 13px; margin-bottom: 6px; }
+.haveli-floor-app .hf-matched-line p { font-size: 12px; overflow-wrap: anywhere; }
+.haveli-floor-app .hf-match-warnings { padding-left: 20px; color: #903f3a; font-size: 12px; }
+.haveli-floor-app .hf-match-items { margin-top: 18px; }
+.haveli-floor-app .hf-match-items > summary { cursor: pointer; color: #08696e; font-size: 13px; font-weight: 650; margin-bottom: 12px; }
+.haveli-floor-app .hf-match-pair .hf-record-gallery { grid-template-columns: 1fr; }
+.haveli-floor-app .hf-match-pair .hf-record-evidence h3 { font-size: 14px; }
+@media (max-width: 1250px) { .haveli-floor-app .hf-verification-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); } .haveli-floor-app .hf-match-pair { grid-template-columns: 1fr; } .haveli-floor-app .hf-match-pair > article + article { border-left: 0; border-top: 1px solid #dce3e9; } }
+@media (max-width: 1000px) { .haveli-floor-app .hf-match-layout { grid-template-columns: 1fr; } .haveli-floor-app .hf-match-queue { position: static; } .haveli-floor-app .hf-match-queue ul { max-height: 350px; } }
+@media (max-width: 600px) { .haveli-floor-app .hf-verification-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; } .haveli-floor-app .hf-verification-box { padding: 12px; } .haveli-floor-app .hf-category-button { min-height: 125px; } .haveli-floor-app .hf-category-button strong { font-size: 17px; } .haveli-floor-app .hf-match-pair > article { padding: 16px; } .haveli-floor-app .hf-match-pair .hf-record-fields { grid-template-columns: 1fr; } }

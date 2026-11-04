@@ -1,0 +1,76 @@
+/* Imports-specific styles; isolated from the original app and all prototypes. */
+.haveli-floor-app .hf-import-panel { margin-bottom: 22px; }
+.haveli-floor-app .hf-import-panel > header { justify-content: space-between; }
+.haveli-floor-app .hf-live-note { padding: 12px 16px; margin-bottom: 20px; background: #e5f2f2; border-left: 3px solid #087c80; font-size: 13px; }
+.haveli-floor-app .hf-live-note span { display: block; margin-top: 3px; color: #526578; font-size: 12px; }
+.haveli-floor-app .hf-import-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; padding: 22px; }
+.haveli-floor-app .hf-upload-card { padding: 22px; background: #fff; border: 1px solid #cbd5df; border-radius: 6px; display: flex; align-items: flex-start; flex-direction: column; gap: 12px; min-width: 0; }
+.haveli-floor-app .hf-upload-card > svg { color: #087c80; }
+.haveli-floor-app .hf-upload-card h3 { margin: 0; font-size: 17px; color: #354e68; }
+.haveli-floor-app .hf-upload-card > p { font-size: 13px; }
+.haveli-floor-app .hf-file-button { position: relative; display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 15px; overflow: hidden; border: 1px solid #087c80; border-radius: 5px; background: #087c80; color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; }
+.haveli-floor-app .hf-file-button input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.haveli-floor-app .hf-file-button:focus-within { outline: 3px solid #087c80; outline-offset: 3px; }
+.haveli-floor-app .hf-file-button:has(input:disabled) { opacity: 0.5; cursor: not-allowed; }
+.haveli-floor-app .hf-file-button:hover:not(:has(input:disabled)) { background: #06666b; }
+.haveli-floor-app .hf-secondary, .haveli-floor-app .hf-danger { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 8px 12px; border: 1px solid #8ca0b3; border-radius: 4px; background: #fff; color: #354e68; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.haveli-floor-app .hf-secondary:hover:not(:disabled) { border-color: #087c80; background: #e5f2f2; }
+.haveli-floor-app .hf-danger { border-color: #d5ada5; color: #903f3a; background: #fff8f7; }
+.haveli-floor-app button:disabled { opacity: 0.5; cursor: not-allowed; }
+.haveli-floor-app .hf-import-toolbar { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0 20px; }
+.haveli-floor-app .hf-import-toolbar .hf-primary { margin-top: 0; }
+.haveli-floor-app .hf-import-note, .haveli-floor-app .hf-import-empty { padding: 16px 22px; font-size: 13px; color: #526578; }
+.haveli-floor-app .hf-upload-card .hf-import-note { padding: 0; font-size: 12px; }
+.haveli-floor-app .hf-import-success { color: #0b625f; }
+.haveli-floor-app .hf-file-name { overflow-wrap: anywhere; font-weight: 600; }
+.haveli-floor-app .hf-import-error, .haveli-floor-app .hf-import-warning, .haveli-floor-app .hf-import-message { padding: 14px 18px; border-radius: 5px; margin-bottom: 18px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.haveli-floor-app .hf-import-error { color: #903f3a; border: 1px solid #ddbab5; background: #f8e9e8; }
+.haveli-floor-app .hf-import-error .hf-secondary { margin-top: 10px; }
+.haveli-floor-app .hf-import-warning { color: #795d22; background: #f7efdf; border: 1px solid #d9c79f; }
+.haveli-floor-app .hf-import-warning h3 { margin: 0 0 10px; font-size: 16px; }
+.haveli-floor-app .hf-import-message { color: #075e63; border: 1px solid #a0ccc5; background: #e5f2f2; }
+.haveli-floor-app .hf-import-feedback > p { margin-bottom: 16px; }
+.haveli-floor-app .hf-image-drop { border-style: dashed; }
+.haveli-floor-app .hf-image-drop.is-dragover { border-color: #087c80; background: #e5f2f2; }
+.haveli-floor-app .hf-import-status { display: inline-flex; align-items: center; padding: 4px 8px; font-size: 12px; font-weight: 600; border-radius: 4px; border: 1px solid #b4c3d1; background: #e9eff4; color: #354e68; text-transform: capitalize; white-space: nowrap; }
+.haveli-floor-app .hf-import-status--done { color: #0b625f; background: #e1f1ee; border-color: #a0ccc5; }
+.haveli-floor-app .hf-import-status--failed { color: #903f3a; background: #f8e9e8; border-color: #ddbab5; }
+.haveli-floor-app .hf-import-status--processing { color: #156370; background: #e2f1f4; border-color: #accfd5; }
+.haveli-floor-app .hf-import-table-wrap { overflow-x: auto; }
+.haveli-floor-app .hf-import-table-wrap table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; background: #fff; }
+.haveli-floor-app .hf-import-table-wrap th { color: #354e68; background: #e8eef3; font-size: 12px; }
+.haveli-floor-app .hf-import-table-wrap th, .haveli-floor-app .hf-import-table-wrap td { padding: 14px 18px; border-bottom: 1px solid #cbd5df; vertical-align: top; }
+.haveli-floor-app .hf-import-table-wrap td:first-child { overflow-wrap: anywhere; min-width: 150px; }
+.haveli-floor-app .hf-import-table-wrap small { display: block; color: #526578; margin-top: 4px; }
+.haveli-floor-app .hf-history-list, .haveli-floor-app .hf-unassigned-list { list-style: none; padding: 0 22px; margin: 0; }
+.haveli-floor-app .hf-history-list li, .haveli-floor-app .hf-unassigned-list li { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 0; border-top: 1px solid #cbd5df; overflow-wrap: anywhere; }
+.haveli-floor-app .hf-history-list p { color: #526578; font-size: 12px; }
+.haveli-floor-app .hf-unassigned-list form { display: flex; align-items: end; gap: 12px; flex-shrink: 0; }
+.haveli-floor-app .hf-unassigned-list label { display: grid; gap: 5px; font-size: 12px; font-weight: 600; }
+.haveli-floor-app .hf-unassigned-list input { width: 160px; min-height: 40px; background: #fff; color: #23374b; padding: 8px 10px; border: 1px solid #8ca0b3; border-radius: 4px; }
+.haveli-floor-app .hf-batch { padding: 16px 22px; }
+.haveli-floor-app .hf-batch h3 { margin: 0 0 8px; font-size: 14px; }
+.haveli-floor-app .hf-batch ul { list-style: none; padding: 0; margin: 0; }
+.haveli-floor-app .hf-batch li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; padding: 12px 0; border-top: 1px solid #cbd5df; font-size: 13px; }
+.haveli-floor-app .hf-batch li strong { overflow-wrap: anywhere; }
+.haveli-floor-app .hf-batch li p { grid-column: 1 / -1; color: #526578; }
+.haveli-floor-app .hf-dialog { width: min(1100px, calc(100vw - 32px)); max-height: 90vh; padding: 0; border: 1px solid #8ca0b3; border-radius: 8px; color: #23374b; background: #fafcfd; font: inherit; }
+.haveli-floor-app .hf-dialog::backdrop { background: rgb(25 44 61 / 65%); }
+.haveli-floor-app .hf-dialog-content { padding: 22px; }
+.haveli-floor-app .hf-dialog-content > header { display: flex; justify-content: space-between; align-items: center; gap: 20px; border-bottom: 1px solid #cbd5df; padding-bottom: 16px; }
+.haveli-floor-app .hf-dialog-note { margin: 16px 0; }
+.haveli-floor-app .hf-image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; }
+.haveli-floor-app .hf-image-card { display: flex; flex-direction: column; align-items: start; gap: 10px; background: #fff; border: 1px solid #cbd5df; border-radius: 5px; padding: 14px; min-width: 0; }
+.haveli-floor-app .hf-image-card > strong { overflow-wrap: anywhere; max-width: 100%; font-size: 13px; }
+.haveli-floor-app .hf-image-card > p { color: #526578; font-size: 12px; overflow-wrap: anywhere; }
+.haveli-floor-app .hf-image-preview { width: 100%; padding: 0; border: 1px solid #cbd5df; border-radius: 4px; cursor: zoom-in; background: #f3f6f8; }
+.haveli-floor-app .hf-image-preview img { display: block; width: 100%; height: 150px; object-fit: contain; }
+.haveli-floor-app .hf-image-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: auto; }
+.haveli-floor-app .hf-replace { min-height: 40px; font-size: 12px; }
+.haveli-floor-app .hf-full-image { display: grid; gap: 16px; padding: 18px; margin: 20px 0; background: #fff; border: 1px solid #cbd5df; }
+.haveli-floor-app .hf-full-image img { max-width: 100%; max-height: 65vh; object-fit: contain; justify-self: center; }
+.haveli-floor-app .hf-unpaid-detail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin: 20px 0 0; }
+.haveli-floor-app .hf-unpaid-detail dt { color: #526578; font-size: 12px; }
+.haveli-floor-app .hf-unpaid-detail dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+@media (max-width: 1000px) { .haveli-floor-app .hf-import-grid { grid-template-columns: 1fr; } .haveli-floor-app .hf-unassigned-list li { align-items: start; flex-direction: column; } }
+@media (max-width: 600px) { .haveli-floor-app .hf-import-grid { padding: 16px; } .haveli-floor-app .hf-upload-card { padding: 16px; } .haveli-floor-app .hf-history-list li { align-items: start; flex-direction: column; } .haveli-floor-app .hf-unassigned-list form { width: 100%; flex-wrap: wrap; } .haveli-floor-app .hf-unpaid-detail { grid-template-columns: 1fr; } .haveli-floor-app .hf-dialog-content { padding: 16px; } }
